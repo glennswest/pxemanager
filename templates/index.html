@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PXE Manager</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+        h1 { color: #00d4ff; margin-bottom: 20px; }
+        h2 { color: #00d4ff; margin-bottom: 15px; font-size: 1.2em; }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            border: 1px solid #0f3460;
+        }
+        .card.full { grid-column: 1 / -1; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        th, td {
+            text-align: left;
+            padding: 10px 8px;
+            border-bottom: 1px solid #0f3460;
+        }
+        th { color: #00d4ff; font-weight: 600; }
+        tr:hover { background: #1a1a3e; }
+        .mac { font-family: monospace; color: #ffd93d; }
+        .hostname { color: #6bcb77; }
+        .image { color: #4d96ff; }
+        .timestamp { color: #888; font-size: 0.85em; }
+        select, input, button {
+            background: #0f3460;
+            border: 1px solid #1a1a4e;
+            color: #eee;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+        select:focus, input:focus { outline: 1px solid #00d4ff; }
+        button {
+            cursor: pointer;
+            background: #00d4ff;
+            color: #000;
+            font-weight: 600;
+        }
+        button:hover { background: #00b8e6; }
+        button.danger { background: #ff6b6b; }
+        button.danger:hover { background: #ee5a5a; }
+        button.secondary { background: #4d96ff; }
+        button.secondary:hover { background: #3d86ef; }
+        .btn-group { display: flex; gap: 5px; }
+        .status-pending { color: #ffd93d; }
+        .status-cycle { color: #ff6b6b; }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+        }
+        .badge-cycle { background: #ff6b6b; color: #fff; }
+        .badge-next { background: #ffd93d; color: #000; }
+        form.inline { display: inline; }
+        .actions { white-space: nowrap; }
+        .empty { color: #666; font-style: italic; text-align: center; padding: 40px; }
+        .refresh-btn {
+            float: right;
+            background: transparent;
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+        }
+        .refresh-btn:hover { background: #00d4ff22; }
+        input[type="text"] { width: 100%; }
+        .form-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        .form-row input { flex: 1; }
+        .cycle-info { font-size: 0.8em; color: #888; }
+    </style>
+</head>
+<body hx-headers='{"Content-Type": "application/x-www-form-urlencoded"}'>
+    <h1>PXE Manager</h1>
+
+    <div class="grid">
+        <div class="card full">
+            <h2>
+                Hosts
+                <button class="refresh-btn" hx-get="/partials/hosts" hx-target="#hosts-table" hx-swap="innerHTML">Refresh</button>
+            </h2>
+            <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body">
+                {{template "hosts_table.html" .}}
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>
+                Boot Images
+                <button class="refresh-btn" hx-get="/partials/images" hx-target="#images-table" hx-swap="innerHTML">Refresh</button>
+            </h2>
+            <div id="images-table">
+                {{template "images_table.html" .Images}}
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>
+                Recent Boots
+                <button class="refresh-btn" hx-get="/partials/logs" hx-target="#logs-table" hx-swap="innerHTML">Refresh</button>
+            </h2>
+            <div id="logs-table" hx-get="/partials/logs" hx-trigger="every 10s">
+                {{template "logs_table.html" .Logs}}
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Add Host</h2>
+        <form hx-post="/api/hosts" hx-swap="none" hx-on::after-request="this.reset(); htmx.trigger(document.body, 'hostsUpdated')">
+            <div class="form-row">
+                <input type="text" name="mac" placeholder="MAC Address (xx:xx:xx:xx:xx:xx)" required pattern="[0-9a-fA-F:.-]+">
+                <input type="text" name="hostname" placeholder="Hostname (optional)">
+                <select name="current_image">
+                    {{range .Images}}
+                    <option value="{{.Name}}" {{if eq .Name "baremetalservices"}}selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                </select>
+                <button type="submit">Add Host</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // Auto-refresh hosts table every 30 seconds
+        setInterval(() => htmx.trigger('#hosts-table', 'hostsUpdated'), 30000);
+    </script>
+</body>
+</html>

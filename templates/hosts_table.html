@@ -1,0 +1,60 @@
+{{if .Hosts}}
+<table>
+    <thead>
+        <tr>
+            <th>Hostname</th>
+            <th>MAC Address</th>
+            <th>Current Image</th>
+            <th>Status</th>
+            <th>Last Boot</th>
+            <th>Boots</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Hosts}}
+        <tr>
+            <td class="hostname">{{if .Hostname}}{{.Hostname}}{{else}}<em>unknown</em>{{end}}</td>
+            <td class="mac">{{.MAC}}</td>
+            <td>
+                <select hx-post="/api/host?mac={{.MAC}}&action=set_image" hx-swap="none" hx-trigger="change" name="image"
+                        hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')">
+                    {{$current := .CurrentImage}}
+                    {{range $.Images}}
+                    <option value="{{.Name}}" {{if eq .Name $current}}selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                </select>
+            </td>
+            <td>
+                {{if .NextImage}}
+                    <span class="badge badge-next">Next: {{.NextImage}}</span>
+                {{else if .CycleImages}}
+                    <span class="badge badge-cycle">Cycle #{{.CycleIndex}}</span>
+                    <div class="cycle-info">{{.CycleImages}}</div>
+                {{else}}
+                    <span style="color:#6bcb77">Ready</span>
+                {{end}}
+            </td>
+            <td class="timestamp">{{if .LastBoot}}{{.LastBoot}}{{else}}-{{end}}</td>
+            <td>{{.BootCount}}</td>
+            <td class="actions">
+                <div class="btn-group">
+                    <button class="secondary" hx-post="/api/cycle/preset?mac={{.MAC}}&preset=bios_update"
+                            hx-swap="none" title="Boot to BIOS update, then return to baremetalservices">BIOS</button>
+                    <button class="secondary" hx-post="/api/cycle/preset?mac={{.MAC}}&preset=openshift_prep"
+                            hx-swap="none" title="Prep for OpenShift install">OCP</button>
+                    {{if or .NextImage .CycleImages}}
+                    <button class="danger" hx-post="/api/host?mac={{.MAC}}&action=clear_cycle"
+                            hx-swap="none" title="Clear pending cycle">Clear</button>
+                    {{end}}
+                    <button class="danger" hx-post="/api/host?mac={{.MAC}}&action=delete"
+                            hx-swap="none" hx-confirm="Delete host {{.MAC}}?">Del</button>
+                </div>
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty">No hosts registered. Hosts are auto-registered on first PXE boot.</div>
+{{end}}

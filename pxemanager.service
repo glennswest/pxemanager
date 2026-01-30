@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+
+name="pxemanager"
+description="PXE Boot Manager"
+command="/usr/local/bin/pxemanager"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/pxemanager.log"
+error_log="/var/log/pxemanager.log"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    mkdir -p /var/lib/pxemanager
+}

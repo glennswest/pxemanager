@@ -1,0 +1,25 @@
+{{if .}}
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>Host</th>
+            <th>Image</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .}}
+        <tr>
+            <td class="timestamp">{{.Timestamp}}</td>
+            <td>
+                {{if .Hostname}}<span class="hostname">{{.Hostname}}</span>{{end}}
+                <span class="mac">{{.MAC}}</span>
+            </td>
+            <td class="image">{{.Image}}</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty">No boot events recorded.</div>
+{{end}}

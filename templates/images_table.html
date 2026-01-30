@@ -1,0 +1,24 @@
+{{if .}}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Kernel</th>
+            <th>Initrd</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .}}
+        <tr>
+            <td class="image">{{.Name}}</td>
+            <td>{{.Type}}</td>
+            <td><code>{{.Kernel}}</code></td>
+            <td><code>{{if .Initrd}}{{.Initrd}}{{else}}-{{end}}</code></td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty">No images configured.</div>
+{{end}}
