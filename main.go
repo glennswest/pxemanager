@@ -113,6 +113,17 @@ type AssetData struct {
 	LastUpdated   string  `json:"last_updated"`
 }
 
+// HostInterface represents a network interface on a host (servers have multiple)
+type HostInterface struct {
+	ID       int    `json:"id"`
+	HostID   int    `json:"host_id"`
+	MAC      string `json:"mac"`
+	Name     string `json:"name"` // e.g., "a", "b", "primary", "secondary"
+	Hostname string `json:"hostname"` // e.g., server1a.g10.lo, server1b.g10.lo
+	Use      bool   `json:"use"` // whether to allow PXE boot from this interface
+	Created  string `json:"created"`
+}
+
 func initDB() error {
 	var err error
 	dbPath := os.Getenv("PXEMANAGER_DB")
@@ -215,6 +226,17 @@ func initDB() error {
 		last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS host_interfaces (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		host_id INTEGER NOT NULL,
+		mac TEXT UNIQUE NOT NULL,
+		name TEXT DEFAULT 'a',
+		hostname TEXT,
+		use BOOLEAN DEFAULT 1,
+		created DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (host_id) REFERENCES hosts(id) ON DELETE CASCADE
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_hosts_mac ON hosts(mac);
 	CREATE INDEX IF NOT EXISTS idx_boot_logs_mac ON boot_logs(mac);
 	CREATE INDEX IF NOT EXISTS idx_boot_logs_timestamp ON boot_logs(timestamp);
@@ -222,6 +244,8 @@ func initDB() error {
 	CREATE INDEX IF NOT EXISTS idx_workflows_mac ON workflows(mac);
 	CREATE INDEX IF NOT EXISTS idx_workflows_state ON workflows(state);
 	CREATE INDEX IF NOT EXISTS idx_asset_data_mac ON asset_data(mac);
+	CREATE INDEX IF NOT EXISTS idx_host_interfaces_mac ON host_interfaces(mac);
+	CREATE INDEX IF NOT EXISTS idx_host_interfaces_host_id ON host_interfaces(host_id);
 	`
 
 	_, err = db.Exec(schema)
@@ -360,6 +384,81 @@ func normalizeMAC(mac string) string {
 	return mac
 }
 
+func getHostInterfaces(hostID int) ([]HostInterface, error) {
+	rows, err := db.Query(`SELECT id, host_id, mac, name, hostname, use, created FROM host_interfaces WHERE host_id = ? ORDER BY name`, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var interfaces []HostInterface
+	for rows.Next() {
+		var i HostInterface
+		var hostname sql.NullString
+		if err := rows.Scan(&i.ID, &i.HostID, &i.MAC, &i.Name, &hostname, &i.Use, &i.Created); err != nil {
+			return nil, err
+		}
+		if hostname.Valid {
+			i.Hostname = hostname.String
+		}
+		interfaces = append(interfaces, i)
+	}
+	return interfaces, nil
+}
+
+func getInterfaceByMAC(mac string) (*HostInterface, error) {
+	var i HostInterface
+	var hostname sql.NullString
+	err := db.QueryRow(`SELECT id, host_id, mac, name, hostname, use, created FROM host_interfaces WHERE mac = ?`, mac).
+		Scan(&i.ID, &i.HostID, &i.MAC, &i.Name, &hostname, &i.Use, &i.Created)
+	if err != nil {
+		return nil, err
+	}
+	if hostname.Valid {
+		i.Hostname = hostname.String
+	}
+	return &i, nil
+}
+
+func getHostByID(id int) (*Host, error) {
+	var h Host
+	var hostname, nextImage, cycleImages, lastBoot, ipmiIP, ipmiUsername, ipmiPassword, consoleID sql.NullString
+	err := db.QueryRow(`SELECT id, mac, hostname, current_image, next_image, cycle_images, cycle_index, last_boot, boot_count, ipmi_ip, ipmi_username, ipmi_password, console_id, created FROM hosts WHERE id = ?`, id).
+		Scan(&h.ID, &h.MAC, &hostname, &h.CurrentImage, &nextImage, &cycleImages, &h.CycleIndex, &lastBoot, &h.BootCount, &ipmiIP, &ipmiUsername, &ipmiPassword, &consoleID, &h.Created)
+	if err != nil {
+		return nil, err
+	}
+	if hostname.Valid {
+		h.Hostname = hostname.String
+	}
+	if nextImage.Valid {
+		h.NextImage = &nextImage.String
+	}
+	if cycleImages.Valid {
+		h.CycleImages = &cycleImages.String
+	}
+	if lastBoot.Valid {
+		h.LastBoot = &lastBoot.String
+	}
+	if ipmiIP.Valid {
+		h.IPMIIP = &ipmiIP.String
+	}
+	if ipmiUsername.Valid {
+		h.IPMIUsername = ipmiUsername.String
+	} else {
+		h.IPMIUsername = "ADMIN"
+	}
+	if ipmiPassword.Valid {
+		h.IPMIPassword = ipmiPassword.String
+	} else {
+		h.IPMIPassword = "ADMIN"
+	}
+	if consoleID.Valid {
+		h.ConsoleID = &consoleID.String
+	}
+	return &h, nil
+}
+
 func getAssetData(mac string) (*AssetData, error) {
 	var a AssetData
 	var manufacturer, productName, serialNumber, biosVersion, cpuModel, diskInfo, networkInfo sql.NullString
@@ -487,9 +586,27 @@ func ipmiPowerOn(host *Host) error {
 	}
 	defer client.Close(context.Background())
 
+	// Set boot device to PXE for next boot
+	client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerUp)
 	if err == nil {
-		logActivity("info", "ipmi", host, "Power on command sent")
+		logActivity("info", "ipmi", host, "Power on command sent (PXE boot)")
+		// Rotate console logs on power on - use image name
+		if host.Hostname != "" {
+			go func() {
+				imageName := host.CurrentImage
+				if host.NextImage != nil && *host.NextImage != "" {
+					imageName = *host.NextImage
+				}
+				label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
+				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+					log.Printf("Failed to rotate console logs for %s: %v", host.Hostname, err)
+				} else {
+					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+				}
+			}()
+		}
 	}
 	return err
 }
@@ -504,6 +621,17 @@ func ipmiPowerOff(host *Host) error {
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerDown)
 	if err == nil {
 		logActivity("info", "ipmi", host, "Power off command sent")
+		// Rotate console logs on power off - start unused log in case of external events
+		if host.Hostname != "" {
+			go func() {
+				label := fmt.Sprintf("unused-%s", time.Now().Format("20060102-150405"))
+				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+					log.Printf("Failed to rotate console logs for %s: %v", host.Hostname, err)
+				} else {
+					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+				}
+			}()
+		}
 	}
 	return err
 }
@@ -515,9 +643,27 @@ func ipmiRestart(host *Host) error {
 	}
 	defer client.Close(context.Background())
 
+	// Set boot device to PXE for next boot
+	client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerCycle)
 	if err == nil {
-		logActivity("info", "ipmi", host, "Power cycle command sent")
+		logActivity("info", "ipmi", host, "Power cycle command sent (PXE boot)")
+		// Rotate console logs on restart - use image name
+		if host.Hostname != "" {
+			go func() {
+				imageName := host.CurrentImage
+				if host.NextImage != nil && *host.NextImage != "" {
+					imageName = *host.NextImage
+				}
+				label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
+				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+					log.Printf("Failed to rotate console logs for %s: %v", host.Hostname, err)
+				} else {
+					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+				}
+			}()
+		}
 	}
 	return err
 }
@@ -790,36 +936,65 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get or create host
 	var host Host
-	var hostname, nextImage, cycleImages, lastBoot sql.NullString
-	err := db.QueryRow(`SELECT id, mac, hostname, current_image, next_image, cycle_images, cycle_index, last_boot, boot_count FROM hosts WHERE mac = ?`, mac).
-		Scan(&host.ID, &host.MAC, &hostname, &host.CurrentImage, &nextImage, &cycleImages, &host.CycleIndex, &lastBoot, &host.BootCount)
 
-	if err == sql.ErrNoRows {
-		// Auto-register new host
-		_, err = db.Exec(`INSERT INTO hosts (mac, current_image) VALUES (?, 'baremetalservices')`, mac)
+	// First check if this MAC is a known interface
+	iface, err := getInterfaceByMAC(mac)
+	if err == nil {
+		// Found in interfaces table
+		if !iface.Use {
+			// Interface disabled - boot local
+			log.Printf("iPXE: MAC %s interface disabled, booting local", mac)
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprintf(w, "#!ipxe\nexit\n")
+			return
+		}
+		// Interface enabled - get the host by ID
+		hostPtr, err := getHostByID(iface.HostID)
 		if err != nil {
-			log.Printf("Failed to auto-register host %s: %v", mac, err)
+			log.Printf("Host ID %d not found for interface %s: %v", iface.HostID, mac, err)
+			http.Error(w, "Host not found", http.StatusInternalServerError)
+			return
 		}
-		host.MAC = mac
-		host.CurrentImage = "baremetalservices"
-	} else if err != nil {
-		log.Printf("Database error for MAC %s: %v", mac, err)
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
+		host = *hostPtr
+		// Update boot stats
+		db.Exec(`UPDATE hosts SET last_boot = CURRENT_TIMESTAMP, boot_count = boot_count + 1 WHERE id = ?`, iface.HostID)
 	} else {
-		if hostname.Valid {
-			host.Hostname = hostname.String
-		}
-		if nextImage.Valid {
-			host.NextImage = &nextImage.String
-		}
-		if cycleImages.Valid {
-			host.CycleImages = &cycleImages.String
-		}
-		if lastBoot.Valid {
-			host.LastBoot = &lastBoot.String
+		// Not in interfaces table - check hosts table directly
+		var hostnameNull, nextImage, cycleImages, lastBoot sql.NullString
+		err = db.QueryRow(`SELECT id, mac, hostname, current_image, next_image, cycle_images, cycle_index, last_boot, boot_count FROM hosts WHERE mac = ?`, mac).
+			Scan(&host.ID, &host.MAC, &hostnameNull, &host.CurrentImage, &nextImage, &cycleImages, &host.CycleIndex, &lastBoot, &host.BootCount)
+
+		if err == sql.ErrNoRows {
+			// Auto-register new host
+			result, err := db.Exec(`INSERT INTO hosts (mac, current_image) VALUES (?, 'baremetalservices')`, mac)
+			if err != nil {
+				log.Printf("Failed to auto-register host %s: %v", mac, err)
+			} else {
+				// Also create primary interface entry
+				hostID, _ := result.LastInsertId()
+				db.Exec(`INSERT INTO host_interfaces (host_id, mac, name, hostname, use) VALUES (?, ?, 'a', '', 1)`, hostID, mac)
+			}
+			host.MAC = mac
+			host.CurrentImage = "baremetalservices"
+			logActivity("info", "boot", nil, fmt.Sprintf("New host discovered: %s", mac))
+		} else if err != nil {
+			log.Printf("Database error for MAC %s: %v", mac, err)
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		} else {
+			if hostnameNull.Valid {
+				host.Hostname = hostnameNull.String
+			}
+			if nextImage.Valid {
+				host.NextImage = &nextImage.String
+			}
+			if cycleImages.Valid {
+				host.CycleImages = &cycleImages.String
+			}
+			if lastBoot.Valid {
+				host.LastBoot = &lastBoot.String
+			}
 		}
 	}
 
@@ -1514,6 +1689,114 @@ func handleAPIWorkflows(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(workflows)
 }
 
+// Interface API handlers
+func handleAPIHostInterfaces(w http.ResponseWriter, r *http.Request) {
+	hostID := r.URL.Query().Get("host_id")
+	if hostID == "" {
+		http.Error(w, "host_id required", http.StatusBadRequest)
+		return
+	}
+
+	var id int
+	fmt.Sscanf(hostID, "%d", &id)
+
+	interfaces, err := getHostInterfaces(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(interfaces)
+}
+
+func handleAPIHostInterface(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "POST":
+		r.ParseForm()
+		action := r.URL.Query().Get("action")
+
+		switch action {
+		case "add":
+			hostID := r.FormValue("host_id")
+			mac := normalizeMAC(r.FormValue("mac"))
+			name := r.FormValue("name")
+			hostname := r.FormValue("hostname")
+			use := r.FormValue("use") == "on" || r.FormValue("use") == "true" || r.FormValue("use") == "1"
+
+			if hostID == "" || mac == "" {
+				http.Error(w, "host_id and mac required", http.StatusBadRequest)
+				return
+			}
+
+			_, err := db.Exec(`INSERT INTO host_interfaces (host_id, mac, name, hostname, use) VALUES (?, ?, ?, ?, ?)`,
+				hostID, mac, name, hostname, use)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			logActivity("info", "config", nil, fmt.Sprintf("Added interface %s (%s) to host", name, mac))
+
+		case "update":
+			id := r.FormValue("id")
+			use := r.FormValue("use") == "on" || r.FormValue("use") == "true" || r.FormValue("use") == "1"
+			name := r.FormValue("name")
+			hostname := r.FormValue("hostname")
+
+			_, err := db.Exec(`UPDATE host_interfaces SET use = ?, name = ?, hostname = ? WHERE id = ?`,
+				use, name, hostname, id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+		case "delete":
+			id := r.URL.Query().Get("id")
+			_, err := db.Exec(`DELETE FROM host_interfaces WHERE id = ?`, id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+		case "link":
+			// Link an existing host's MAC to another host as an interface
+			mac := normalizeMAC(r.FormValue("mac"))
+			targetHostID := r.FormValue("target_host_id")
+			name := r.FormValue("name")
+			if name == "" {
+				name = "b"
+			}
+
+			// Get the host that owns this MAC
+			sourceHost, err := getHostByMAC(mac)
+			if err != nil {
+				http.Error(w, "Source host not found", http.StatusNotFound)
+				return
+			}
+
+			// Add as interface to target host
+			_, err = db.Exec(`INSERT INTO host_interfaces (host_id, mac, name, hostname, use) VALUES (?, ?, ?, ?, 0)`,
+				targetHostID, mac, name, sourceHost.Hostname)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			// Delete the source host entry (it's now just an interface)
+			db.Exec(`DELETE FROM hosts WHERE mac = ?`, mac)
+
+			logActivity("info", "config", nil, fmt.Sprintf("Linked interface %s to host %s", mac, targetHostID))
+
+		default:
+			http.Error(w, "unknown action", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("HX-Trigger", "hostsUpdated")
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
 // Asset data API - for baremetalservices to report hardware info
 func handleAPIAssetData(w http.ResponseWriter, r *http.Request) {
 	mac := normalizeMAC(r.URL.Query().Get("mac"))
@@ -1653,12 +1936,14 @@ func handleHostDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assetData, _ := getAssetData(mac) // May be nil if no asset data
+	assetData, _ := getAssetData(mac)          // May be nil if no asset data
+	interfaces, _ := getHostInterfaces(host.ID) // Get all interfaces for this host
 
 	data := struct {
-		Host      *Host
-		AssetData *AssetData
-	}{host, assetData}
+		Host       *Host
+		AssetData  *AssetData
+		Interfaces []HostInterface
+	}{host, assetData, interfaces}
 
 	templates.ExecuteTemplate(w, "host_detail.html", data)
 }
@@ -1668,6 +1953,11 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
+	// Prevent browser caching
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 
 	hosts, _ := getHosts()
 	images, _ := getImages()
@@ -1765,6 +2055,10 @@ func main() {
 
 	// Asset data routes
 	http.HandleFunc("/api/asset", handleAPIAssetData)
+
+	// Interface routes
+	http.HandleFunc("/api/host/interfaces", handleAPIHostInterfaces)
+	http.HandleFunc("/api/host/interface", handleAPIHostInterface)
 
 	// Activity log routes
 	http.HandleFunc("/api/activity", handleAPIActivity)

@@ -41,7 +41,7 @@
                     <button class="success" hx-post="/api/host/ipmi?mac={{.MAC}}&action=power_on" hx-swap="none"{{if not .IPMIIP}} disabled{{end}}>On</button>
                     <button class="danger" hx-post="/api/host/ipmi?mac={{.MAC}}&action=power_off" hx-swap="none"{{if not .IPMIIP}} disabled{{end}}>Off</button>
                     <button class="secondary" hx-post="/api/host/ipmi?mac={{.MAC}}&action=restart" hx-swap="none"{{if not .IPMIIP}} disabled{{end}}>Restart</button>
-                    <a href="http://console.g11.lo/?host={{if .Hostname}}{{.Hostname}}{{else}}{{.MAC}}{{end}}" target="_blank" class="btn secondary">Console</a>
+                    <a href="http://console.g11.lo/#{{if .Hostname}}{{.Hostname}}{{else}}{{.MAC}}{{end}}" target="_blank" class="btn secondary">Console</a>
                 </div>
             </td>
         </tr>

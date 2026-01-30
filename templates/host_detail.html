@@ -2,9 +2,6 @@
     <div class="detail-label">Hostname:</div>
     <div class="detail-value">{{if .Host.Hostname}}{{.Host.Hostname}}{{else}}<em>Not set</em>{{end}}</div>
 
-    <div class="detail-label">MAC Address:</div>
-    <div class="detail-value mac">{{.Host.MAC}}</div>
-
     <div class="detail-label">Current Image:</div>
     <div class="detail-value">{{.Host.CurrentImage}}</div>
 
@@ -18,17 +15,38 @@
     <div class="detail-value">{{.Host.Created}}</div>
 </div>
 
-<h3 style="color:#00d4ff; margin: 20px 0 10px; font-size: 1em;">IPMI Configuration</h3>
-<div class="detail-grid">
-    <div class="detail-label">IPMI IP:</div>
-    <div class="detail-value">{{if .Host.IPMIIP}}{{.Host.IPMIIP}}{{else}}<em>Not configured</em>{{end}}</div>
-
-    <div class="detail-label">IPMI Username:</div>
-    <div class="detail-value">{{.Host.IPMIUsername}}</div>
-
-    <div class="detail-label">IPMI Password:</div>
-    <div class="detail-value">{{.Host.IPMIPassword}}</div>
-</div>
+<h3 style="color:#00d4ff; margin: 20px 0 10px; font-size: 1em;">Network Interfaces</h3>
+{{if .Interfaces}}
+<table style="margin-bottom: 15px;">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>MAC Address</th>
+            <th>Hostname</th>
+            <th>PXE Boot</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .Interfaces}}
+        <tr>
+            <td>{{.Name}}</td>
+            <td class="mac">{{.MAC}}</td>
+            <td>{{.Hostname}}</td>
+            <td>
+                <form class="inline-form" hx-post="/api/host/interface?action=update" hx-swap="none" hx-trigger="change">
+                    <input type="hidden" name="id" value="{{.ID}}">
+                    <input type="hidden" name="name" value="{{.Name}}">
+                    <input type="hidden" name="hostname" value="{{.Hostname}}">
+                    <input type="checkbox" name="use" {{if .Use}}checked{{end}}>
+                </form>
+            </td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<p style="color:#888; font-style:italic;">No interfaces configured. Primary MAC: {{.Host.MAC}}</p>
+{{end}}
 
 {{if .AssetData}}
 <h3 style="color:#00d4ff; margin: 20px 0 10px; font-size: 1em;">Asset Information</h3>

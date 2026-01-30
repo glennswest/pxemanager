@@ -2,31 +2,24 @@
 <table>
     <thead>
         <tr>
-            <th>Time</th>
-            <th>Level</th>
-            <th>Category</th>
-            <th>Host</th>
+            <th style="width: 160px;">Time</th>
+            <th style="width: 80px;">Level</th>
+            <th style="width: 80px;">Category</th>
+            <th style="width: 120px;">Host</th>
             <th>Message</th>
         </tr>
     </thead>
     <tbody>
         {{range .}}
-        <tr class="log-{{.Level}}">
+        <tr>
             <td class="timestamp">{{.Timestamp}}</td>
             <td>
-                {{if eq .Level "error"}}
-                <span class="badge badge-error">error</span>
-                {{else if eq .Level "warn"}}
-                <span class="badge badge-warn">warn</span>
-                {{else}}
-                <span class="badge badge-info">info</span>
-                {{end}}
+                {{if eq .Level "error"}}<span class="badge badge-error">error</span>
+                {{else if eq .Level "warn"}}<span class="badge badge-warn">warn</span>
+                {{else}}<span class="badge badge-info">info</span>{{end}}
             </td>
             <td>{{.Category}}</td>
-            <td>
-                {{if .Hostname}}<span class="hostname">{{.Hostname}}</span>{{end}}
-                {{if .MAC}}<span class="mac">{{.MAC}}</span>{{end}}
-            </td>
+            <td class="hostname">{{if .Hostname}}{{.Hostname}}{{else}}-{{end}}</td>
             <td>{{.Message}}</td>
         </tr>
         {{end}}

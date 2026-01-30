@@ -2,7 +2,6 @@
 <table>
     <thead>
         <tr>
-            <th>MAC Address</th>
             <th>Hostname</th>
             <th>IPMI Address</th>
             <th>Username</th>
@@ -13,19 +12,11 @@
     <tbody>
         {{range .}}
         <tr>
-            <td class="mac">{{.MAC}}</td>
-            <td>
-                <form class="inline-form" hx-post="/api/host/config?mac={{.MAC}}" hx-swap="none" hx-trigger="change" hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')">
-                    <input type="text" name="hostname" value="{{.Hostname}}" placeholder="server01">
-                    <input type="hidden" name="ipmi_ip" value="{{if .IPMIIP}}{{.IPMIIP}}{{end}}">
-                    <input type="hidden" name="ipmi_username" value="{{if .IPMIUsername}}{{.IPMIUsername}}{{else}}ADMIN{{end}}">
-                    <input type="hidden" name="ipmi_password" value="{{if .IPMIPassword}}{{.IPMIPassword}}{{else}}ADMIN{{end}}">
-                </form>
-            </td>
+            <td class="hostname">{{if .Hostname}}{{.Hostname}}{{else}}<em>({{.MAC}})</em>{{end}}</td>
             <td>
                 <form class="inline-form" hx-post="/api/host/config?mac={{.MAC}}" hx-swap="none" hx-trigger="change" hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')">
                     <input type="hidden" name="hostname" value="{{.Hostname}}">
-                    <input type="text" name="ipmi_ip" value="{{if .IPMIIP}}{{.IPMIIP}}{{end}}" placeholder="">
+                    <input type="text" name="ipmi_ip" value="{{if .IPMIIP}}{{.IPMIIP}}{{end}}" placeholder="hostname.g11.lo">
                     <input type="hidden" name="ipmi_username" value="{{if .IPMIUsername}}{{.IPMIUsername}}{{else}}ADMIN{{end}}">
                     <input type="hidden" name="ipmi_password" value="{{if .IPMIPassword}}{{.IPMIPassword}}{{else}}ADMIN{{end}}">
                 </form>

@@ -24,6 +24,11 @@ sleep 1
 echo "Deploying to $TARGET_HOST..."
 scp ${BINARY_NAME}-arm64 $TARGET_HOST:$REMOTE_PATH
 
+# Deploy boot files
+echo "Deploying boot files..."
+scp undionly-custom.kpxe $TARGET_HOST:/tftpboot/undionly.kpxe
+scp boot.ipxe $TARGET_HOST:/tftpboot/boot.ipxe
+
 # Start remote service
 echo "Starting remote service..."
 ssh $TARGET_HOST "chmod +x $REMOTE_PATH && nohup $REMOTE_PATH > /var/log/pxemanager.log 2>&1 &"

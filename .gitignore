@@ -1,3 +1,4 @@
 pxemanager
+pxemanager-arm64
 pxemanager-linux
-*.kpxe
+pxemanager.db
