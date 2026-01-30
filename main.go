@@ -1401,7 +1401,8 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("HX-Trigger", "hostsUpdated")
+	// Don't trigger hostsUpdated - power state is polled separately
+	// and refreshing the table during IPMI operations causes race conditions
 	w.WriteHeader(http.StatusOK)
 }
 
