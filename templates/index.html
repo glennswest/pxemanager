@@ -167,7 +167,8 @@
             margin-bottom: 15px;
             justify-content: flex-end;
         }
-        .scroll-container { max-height: 300px; overflow-y: auto; }
+        .scroll-container { max-height: 300px; overflow-y: auto; min-height: 100px; }
+        .scroll-container.htmx-request { opacity: 0.7; }
 
         /* Activity section below hosts */
         .activity-section {
@@ -246,7 +247,7 @@
 
         <div class="activity-section">
             <h2>Activity Log</h2>
-            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s, activityUpdated from:body">
+            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s, activityUpdated from:body" hx-swap="innerHTML show:none">
             </div>
         </div>
     </div>
