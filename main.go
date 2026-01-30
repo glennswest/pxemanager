@@ -1012,6 +1012,7 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 			} else {
 				// Also create primary interface entry
 				hostID, _ := result.LastInsertId()
+				host.ID = int(hostID)
 				db.Exec(`INSERT INTO host_interfaces (host_id, mac, name, hostname, use) VALUES (?, ?, 'a', '', 1)`, hostID, mac)
 			}
 			host.MAC = mac
@@ -1044,7 +1045,7 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 	if host.NextImage != nil && *host.NextImage != "" {
 		imageName = *host.NextImage
 		// Clear next_image after use
-		db.Exec(`UPDATE hosts SET next_image = NULL WHERE mac = ?`, mac)
+		db.Exec(`UPDATE hosts SET next_image = NULL WHERE id = ?`, host.ID)
 	} else if host.CycleImages != nil && *host.CycleImages != "" {
 		// Check for boot cycle
 		var cycle []string
@@ -1055,9 +1056,9 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 				newIndex := host.CycleIndex + 1
 				if newIndex >= len(cycle) {
 					// Cycle complete, clear it
-					db.Exec(`UPDATE hosts SET cycle_images = NULL, cycle_index = 0 WHERE mac = ?`, mac)
+					db.Exec(`UPDATE hosts SET cycle_images = NULL, cycle_index = 0 WHERE id = ?`, host.ID)
 				} else {
-					db.Exec(`UPDATE hosts SET cycle_index = ? WHERE mac = ?`, newIndex, mac)
+					db.Exec(`UPDATE hosts SET cycle_index = ? WHERE id = ?`, newIndex, host.ID)
 				}
 			}
 		}
@@ -1081,8 +1082,8 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		img.Append = appendStr.String
 	}
 
-	// Get full host info for IPMI operations
-	fullHost, _ := getHostByMAC(mac)
+	// Get full host info for IPMI operations (use host.ID since MAC might be an interface)
+	fullHost, _ := getHostByID(host.ID)
 
 	// Boot-local-after: set IPMI to boot from disk after this image boots
 	if img.BootLocalAfter && fullHost != nil && fullHost.IPMIIP != nil && *fullHost.IPMIIP != "" {
@@ -1105,11 +1106,11 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	// Update boot stats
-	db.Exec(`UPDATE hosts SET last_boot = CURRENT_TIMESTAMP, boot_count = boot_count + 1 WHERE mac = ?`, mac)
+	// Update boot stats (use host.ID since MAC might be an interface)
+	db.Exec(`UPDATE hosts SET last_boot = CURRENT_TIMESTAMP, boot_count = boot_count + 1 WHERE id = ?`, host.ID)
 
 	// Log boot event
-	db.Exec(`INSERT INTO boot_logs (mac, hostname, image) VALUES (?, ?, ?)`, mac, host.Hostname, imageName)
+	db.Exec(`INSERT INTO boot_logs (mac, hostname, image) VALUES (?, ?, ?)`, host.MAC, host.Hostname, imageName)
 
 	// Log to activity log
 	logActivity("info", "boot", fullHost, fmt.Sprintf("Booting image %s", imageName))
@@ -1440,8 +1441,8 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Don't trigger hostsUpdated - power state is polled separately
-	// and refreshing the table during IPMI operations causes race conditions
+	// Trigger activity log refresh (but not hosts table to avoid race conditions)
+	w.Header().Set("HX-Trigger", "activityUpdated")
 	w.WriteHeader(http.StatusOK)
 }
 

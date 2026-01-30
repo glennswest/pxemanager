@@ -103,6 +103,30 @@
         button.success:hover { background: #5aba66; }
         button:disabled { opacity: 0.4; cursor: not-allowed; }
 
+        /* Button loading state */
+        button.htmx-request {
+            position: relative;
+            color: transparent !important;
+            pointer-events: none;
+        }
+        button.htmx-request::after {
+            content: "";
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            top: 50%;
+            left: 50%;
+            margin-left: -7px;
+            margin-top: -7px;
+            border: 2px solid rgba(0,0,0,0.3);
+            border-top-color: #000;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         .btn-group { display: flex; gap: 5px; }
         .badge {
             display: inline-block;
@@ -222,7 +246,7 @@
 
         <div class="activity-section">
             <h2>Activity Log</h2>
-            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s">
+            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s, activityUpdated from:body">
             </div>
         </div>
     </div>
