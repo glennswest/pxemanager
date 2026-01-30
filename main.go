@@ -784,6 +784,45 @@ func getHostByMAC(mac string) (*Host, error) {
 	return &h, nil
 }
 
+func getHostByHostname(hostname string) (*Host, error) {
+	var h Host
+	var hn, nextImage, cycleImages, lastBoot, ipmiIP, ipmiUsername, ipmiPassword, consoleID sql.NullString
+	err := db.QueryRow(`SELECT id, mac, hostname, current_image, next_image, cycle_images, cycle_index, last_boot, boot_count, ipmi_ip, ipmi_username, ipmi_password, console_id, created FROM hosts WHERE hostname = ?`, hostname).
+		Scan(&h.ID, &h.MAC, &hn, &h.CurrentImage, &nextImage, &cycleImages, &h.CycleIndex, &lastBoot, &h.BootCount, &ipmiIP, &ipmiUsername, &ipmiPassword, &consoleID, &h.Created)
+	if err != nil {
+		return nil, err
+	}
+	if hn.Valid {
+		h.Hostname = hn.String
+	}
+	if nextImage.Valid {
+		h.NextImage = &nextImage.String
+	}
+	if cycleImages.Valid {
+		h.CycleImages = &cycleImages.String
+	}
+	if lastBoot.Valid {
+		h.LastBoot = &lastBoot.String
+	}
+	if ipmiIP.Valid {
+		h.IPMIIP = &ipmiIP.String
+	}
+	if ipmiUsername.Valid {
+		h.IPMIUsername = ipmiUsername.String
+	} else {
+		h.IPMIUsername = "ADMIN"
+	}
+	if ipmiPassword.Valid {
+		h.IPMIPassword = ipmiPassword.String
+	} else {
+		h.IPMIPassword = "ADMIN"
+	}
+	if consoleID.Valid {
+		h.ConsoleID = &consoleID.String
+	}
+	return &h, nil
+}
+
 func getHostIP(mac string) string {
 	// For now, we'll need to get the IP from DHCP leases or DNS
 	// This is a placeholder - in production you'd query your DHCP server
@@ -1345,14 +1384,14 @@ func handleAPIImageAdd(w http.ResponseWriter, r *http.Request) {
 
 // IPMI API handlers
 func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
-	mac := normalizeMAC(r.URL.Query().Get("mac"))
-	if mac == "" {
-		http.Error(w, "MAC required", http.StatusBadRequest)
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		http.Error(w, "host parameter required", http.StatusBadRequest)
 		return
 	}
 
 	action := r.URL.Query().Get("action")
-	host, err := getHostByMAC(mac)
+	host, err := getHostByHostname(hostname)
 	if err != nil {
 		http.Error(w, "Host not found", http.StatusNotFound)
 		return
@@ -1407,15 +1446,17 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAPIHostIPMIStatus(w http.ResponseWriter, r *http.Request) {
-	mac := normalizeMAC(r.URL.Query().Get("mac"))
-	if mac == "" {
-		http.Error(w, "MAC required", http.StatusBadRequest)
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "-")
 		return
 	}
 
-	host, err := getHostByMAC(mac)
+	host, err := getHostByHostname(hostname)
 	if err != nil {
-		http.Error(w, "Host not found", http.StatusNotFound)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprint(w, "-")
 		return
 	}
 
@@ -1431,13 +1472,13 @@ func handleAPIHostIPMIStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAPIHostIPMITest(w http.ResponseWriter, r *http.Request) {
-	mac := normalizeMAC(r.URL.Query().Get("mac"))
-	if mac == "" {
-		http.Error(w, "MAC required", http.StatusBadRequest)
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		http.Error(w, "host parameter required", http.StatusBadRequest)
 		return
 	}
 
-	host, err := getHostByMAC(mac)
+	host, err := getHostByHostname(hostname)
 	if err != nil {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<span class="badge badge-error">Not Found</span>`)
@@ -1469,9 +1510,9 @@ func handleAPIHostIPMIConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mac := normalizeMAC(r.URL.Query().Get("mac"))
-	if mac == "" {
-		http.Error(w, "MAC required", http.StatusBadRequest)
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		http.Error(w, "host parameter required", http.StatusBadRequest)
 		return
 	}
 
@@ -1487,14 +1528,14 @@ func handleAPIHostIPMIConfig(w http.ResponseWriter, r *http.Request) {
 		ipmiPassword = "ADMIN"
 	}
 
-	_, err := db.Exec(`UPDATE hosts SET ipmi_ip = ?, ipmi_username = ?, ipmi_password = ? WHERE mac = ?`,
-		ipmiIP, ipmiUsername, ipmiPassword, mac)
+	_, err := db.Exec(`UPDATE hosts SET ipmi_ip = ?, ipmi_username = ?, ipmi_password = ? WHERE hostname = ?`,
+		ipmiIP, ipmiUsername, ipmiPassword, hostname)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	host, _ := getHostByMAC(mac)
+	host, _ := getHostByHostname(hostname)
 	logActivity("info", "config", host, fmt.Sprintf("Updated IPMI configuration (IP: %s)", ipmiIP))
 
 	w.Header().Set("HX-Trigger", "hostsUpdated")

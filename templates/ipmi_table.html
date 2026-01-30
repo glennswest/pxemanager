@@ -38,7 +38,7 @@
                 </form>
             </td>
             <td>
-                <button class="secondary" hx-post="/api/host/ipmi/test?mac={{.MAC}}" hx-target="this" hx-swap="outerHTML">Test</button>
+                {{if .Hostname}}<button class="secondary" hx-post="/api/host/ipmi/test?host={{.Hostname}}" hx-target="this" hx-swap="outerHTML">Test</button>{{else}}<span class="badge">Set hostname</span>{{end}}
             </td>
         </tr>
         {{end}}
