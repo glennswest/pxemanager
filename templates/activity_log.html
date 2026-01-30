@@ -1,0 +1,37 @@
+{{if .}}
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>Level</th>
+            <th>Category</th>
+            <th>Host</th>
+            <th>Message</th>
+        </tr>
+    </thead>
+    <tbody>
+        {{range .}}
+        <tr class="log-{{.Level}}">
+            <td class="timestamp">{{.Timestamp}}</td>
+            <td>
+                {{if eq .Level "error"}}
+                <span class="badge badge-error">error</span>
+                {{else if eq .Level "warn"}}
+                <span class="badge badge-warn">warn</span>
+                {{else}}
+                <span class="badge badge-info">info</span>
+                {{end}}
+            </td>
+            <td>{{.Category}}</td>
+            <td>
+                {{if .Hostname}}<span class="hostname">{{.Hostname}}</span>{{end}}
+                {{if .MAC}}<span class="mac">{{.MAC}}</span>{{end}}
+            </td>
+            <td>{{.Message}}</td>
+        </tr>
+        {{end}}
+    </tbody>
+</table>
+{{else}}
+<div class="empty">No activity recorded.</div>
+{{end}}

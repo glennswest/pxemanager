@@ -3,19 +3,24 @@
     <thead>
         <tr>
             <th>Hostname</th>
-            <th>MAC Address</th>
+            <th>Power</th>
             <th>Current Image</th>
             <th>Status</th>
             <th>Last Boot</th>
-            <th>Boots</th>
             <th>Actions</th>
         </tr>
     </thead>
     <tbody>
         {{range .Hosts}}
         <tr>
-            <td class="hostname">{{if .Hostname}}{{.Hostname}}{{else}}<em>unknown</em>{{end}}</td>
-            <td class="mac">{{.MAC}}</td>
+            <td class="hostname">
+                {{if .Hostname}}<a onclick="showHostDetail('{{.MAC}}')">{{.Hostname}}</a>{{else}}<a onclick="showHostDetail('{{.MAC}}')"><em>({{.MAC}})</em></a>{{end}}
+            </td>
+            <td class="power-status">
+                {{if .IPMIIP}}
+                <span hx-get="/api/host/ipmi/status?mac={{.MAC}}" hx-trigger="load, every 30s" hx-swap="innerHTML">...</span>
+                {{else}}-{{end}}
+            </td>
             <td>
                 <select hx-post="/api/host?mac={{.MAC}}&action=set_image" hx-swap="none" hx-trigger="change" name="image"
                         hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')">
@@ -26,29 +31,17 @@
                 </select>
             </td>
             <td>
-                {{if .NextImage}}
-                    <span class="badge badge-next">Next: {{.NextImage}}</span>
-                {{else if .CycleImages}}
-                    <span class="badge badge-cycle">Cycle #{{.CycleIndex}}</span>
-                    <div class="cycle-info">{{.CycleImages}}</div>
-                {{else}}
-                    <span style="color:#6bcb77">Ready</span>
-                {{end}}
+                {{if .NextImage}}<span class="badge badge-next">Next: {{.NextImage}}</span>
+                {{else if .CycleImages}}<span class="badge badge-cycle">Cycle</span>
+                {{else}}<span style="color:#6bcb77">Ready</span>{{end}}
             </td>
             <td class="timestamp">{{if .LastBoot}}{{.LastBoot}}{{else}}-{{end}}</td>
-            <td>{{.BootCount}}</td>
-            <td class="actions">
+            <td>
                 <div class="btn-group">
-                    <button class="secondary" hx-post="/api/cycle/preset?mac={{.MAC}}&preset=bios_update"
-                            hx-swap="none" title="Boot to BIOS update, then return to baremetalservices">BIOS</button>
-                    <button class="secondary" hx-post="/api/cycle/preset?mac={{.MAC}}&preset=openshift_prep"
-                            hx-swap="none" title="Prep for OpenShift install">OCP</button>
-                    {{if or .NextImage .CycleImages}}
-                    <button class="danger" hx-post="/api/host?mac={{.MAC}}&action=clear_cycle"
-                            hx-swap="none" title="Clear pending cycle">Clear</button>
-                    {{end}}
-                    <button class="danger" hx-post="/api/host?mac={{.MAC}}&action=delete"
-                            hx-swap="none" hx-confirm="Delete host {{.MAC}}?">Del</button>
+                    <button class="success" hx-post="/api/host/ipmi?mac={{.MAC}}&action=power_on" hx-swap="none"{{if not .IPMIIP}} disabled{{end}}>On</button>
+                    <button class="danger" hx-post="/api/host/ipmi?mac={{.MAC}}&action=power_off" hx-swap="none"{{if not .IPMIIP}} disabled{{end}}>Off</button>
+                    <button class="secondary" hx-post="/api/host/ipmi?mac={{.MAC}}&action=restart" hx-swap="none"{{if not .IPMIIP}} disabled{{end}}>Restart</button>
+                    <a href="http://console.g11.lo/?host={{if .Hostname}}{{.Hostname}}{{else}}{{.MAC}}{{end}}" target="_blank" class="btn secondary">Console</a>
                 </div>
             </td>
         </tr>

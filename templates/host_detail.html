@@ -1,0 +1,87 @@
+<div class="detail-grid">
+    <div class="detail-label">Hostname:</div>
+    <div class="detail-value">{{if .Host.Hostname}}{{.Host.Hostname}}{{else}}<em>Not set</em>{{end}}</div>
+
+    <div class="detail-label">MAC Address:</div>
+    <div class="detail-value mac">{{.Host.MAC}}</div>
+
+    <div class="detail-label">Current Image:</div>
+    <div class="detail-value">{{.Host.CurrentImage}}</div>
+
+    <div class="detail-label">Boot Count:</div>
+    <div class="detail-value">{{.Host.BootCount}}</div>
+
+    <div class="detail-label">Last Boot:</div>
+    <div class="detail-value">{{if .Host.LastBoot}}{{.Host.LastBoot}}{{else}}-{{end}}</div>
+
+    <div class="detail-label">Created:</div>
+    <div class="detail-value">{{.Host.Created}}</div>
+</div>
+
+<h3 style="color:#00d4ff; margin: 20px 0 10px; font-size: 1em;">IPMI Configuration</h3>
+<div class="detail-grid">
+    <div class="detail-label">IPMI IP:</div>
+    <div class="detail-value">{{if .Host.IPMIIP}}{{.Host.IPMIIP}}{{else}}<em>Not configured</em>{{end}}</div>
+
+    <div class="detail-label">IPMI Username:</div>
+    <div class="detail-value">{{.Host.IPMIUsername}}</div>
+
+    <div class="detail-label">IPMI Password:</div>
+    <div class="detail-value">{{.Host.IPMIPassword}}</div>
+</div>
+
+{{if .AssetData}}
+<h3 style="color:#00d4ff; margin: 20px 0 10px; font-size: 1em;">Asset Information</h3>
+<div class="detail-grid">
+    {{if .AssetData.Manufacturer}}
+    <div class="detail-label">Manufacturer:</div>
+    <div class="detail-value">{{.AssetData.Manufacturer}}</div>
+    {{end}}
+
+    {{if .AssetData.ProductName}}
+    <div class="detail-label">Product:</div>
+    <div class="detail-value">{{.AssetData.ProductName}}</div>
+    {{end}}
+
+    {{if .AssetData.SerialNumber}}
+    <div class="detail-label">Serial Number:</div>
+    <div class="detail-value">{{.AssetData.SerialNumber}}</div>
+    {{end}}
+
+    {{if .AssetData.BIOSVersion}}
+    <div class="detail-label">BIOS Version:</div>
+    <div class="detail-value">{{.AssetData.BIOSVersion}}</div>
+    {{end}}
+
+    {{if .AssetData.TotalMemoryGB}}
+    <div class="detail-label">Total Memory:</div>
+    <div class="detail-value">{{.AssetData.TotalMemoryGB}} GB</div>
+    {{end}}
+
+    {{if .AssetData.CPUModel}}
+    <div class="detail-label">CPU:</div>
+    <div class="detail-value">{{.AssetData.CPUModel}} ({{.AssetData.CPUCount}} cores)</div>
+    {{end}}
+
+    {{if .AssetData.DiskInfo}}
+    <div class="detail-label">Disks:</div>
+    <div class="detail-value" style="white-space: pre-wrap;">{{.AssetData.DiskInfo}}</div>
+    {{end}}
+
+    {{if .AssetData.NetworkInfo}}
+    <div class="detail-label">Network:</div>
+    <div class="detail-value" style="white-space: pre-wrap;">{{.AssetData.NetworkInfo}}</div>
+    {{end}}
+
+    {{if .AssetData.LastUpdated}}
+    <div class="detail-label">Last Updated:</div>
+    <div class="detail-value">{{.AssetData.LastUpdated}}</div>
+    {{end}}
+</div>
+{{end}}
+
+<div style="margin-top: 20px; display: flex; gap: 10px;">
+    <button class="danger" hx-post="/api/host?mac={{.Host.MAC}}&action=delete" hx-swap="none"
+            hx-on::after-request="closeModal(); htmx.trigger(document.body, 'hostsUpdated')"
+            onclick="return confirm('Delete this host?')">Delete Host</button>
+</div>

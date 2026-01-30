@@ -6,19 +6,128 @@
             <th>Type</th>
             <th>Kernel</th>
             <th>Initrd</th>
+            <th>Flags</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
         {{range .}}
-        <tr>
+        <tr id="image-row-{{.ID}}">
             <td class="image">{{.Name}}</td>
             <td>{{.Type}}</td>
             <td><code>{{.Kernel}}</code></td>
             <td><code>{{if .Initrd}}{{.Initrd}}{{else}}-{{end}}</code></td>
+            <td class="flags">
+                {{if .EraseBootDrive}}<span class="badge badge-warn" title="Erase boot drive before this image">EraseBoot</span>{{end}}
+                {{if .EraseAllDrives}}<span class="badge badge-error" title="Erase all drives before this image">EraseAll</span>{{end}}
+                {{if .BootLocalAfter}}<span class="badge badge-info" title="Set IPMI to boot from disk after this image">LocalAfter</span>{{end}}
+            </td>
+            <td class="actions">
+                <div class="btn-group">
+                    <button class="secondary" onclick="toggleEditImage({{.ID}})">Edit</button>
+                    <button class="danger" hx-post="/api/image/delete?id={{.ID}}" hx-swap="none" hx-confirm="Delete image {{.Name}}?">Del</button>
+                </div>
+            </td>
+        </tr>
+        <tr id="image-edit-{{.ID}}" style="display:none" class="edit-row">
+            <td colspan="6">
+                <form hx-post="/api/image/update" hx-swap="none" hx-on::after-request="toggleEditImage({{.ID}})">
+                    <input type="hidden" name="id" value="{{.ID}}">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" name="name" value="{{.Name}}" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Type</label>
+                            <select name="type">
+                                <option value="linux" {{if eq .Type "linux"}}selected{{end}}>linux</option>
+                                <option value="memdisk" {{if eq .Type "memdisk"}}selected{{end}}>memdisk</option>
+                                <option value="local" {{if eq .Type "local"}}selected{{end}}>local</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Kernel</label>
+                            <input type="text" name="kernel" value="{{.Kernel}}">
+                        </div>
+                        <div class="form-group">
+                            <label>Initrd</label>
+                            <input type="text" name="initrd" value="{{.Initrd}}">
+                        </div>
+                        <div class="form-group full-width">
+                            <label>Append</label>
+                            <input type="text" name="append" value="{{.Append}}">
+                        </div>
+                        <div class="form-group checkboxes">
+                            <label><input type="checkbox" name="erase_boot_drive" {{if .EraseBootDrive}}checked{{end}}> Erase boot drive</label>
+                            <label><input type="checkbox" name="erase_all_drives" {{if .EraseAllDrives}}checked{{end}}> Erase all drives</label>
+                            <label><input type="checkbox" name="boot_local_after" {{if .BootLocalAfter}}checked{{end}}> Boot local after</label>
+                        </div>
+                        <div class="form-group">
+                            <button type="submit">Save</button>
+                            <button type="button" class="secondary" onclick="toggleEditImage({{.ID}})">Cancel</button>
+                        </div>
+                    </div>
+                </form>
+            </td>
         </tr>
         {{end}}
     </tbody>
 </table>
+
+<div class="add-image">
+    <h3>Add New Image</h3>
+    <form hx-post="/api/image/add" hx-swap="none" hx-on::after-request="this.reset()">
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" name="name" placeholder="image-name" required>
+            </div>
+            <div class="form-group">
+                <label>Type</label>
+                <select name="type">
+                    <option value="linux">linux</option>
+                    <option value="memdisk">memdisk</option>
+                    <option value="local">local</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Kernel</label>
+                <input type="text" name="kernel" placeholder="vmlinuz">
+            </div>
+            <div class="form-group">
+                <label>Initrd</label>
+                <input type="text" name="initrd" placeholder="initramfs">
+            </div>
+            <div class="form-group full-width">
+                <label>Append</label>
+                <input type="text" name="append" placeholder="kernel arguments">
+            </div>
+            <div class="form-group checkboxes">
+                <label><input type="checkbox" name="erase_boot_drive"> Erase boot drive</label>
+                <label><input type="checkbox" name="erase_all_drives"> Erase all drives</label>
+                <label><input type="checkbox" name="boot_local_after"> Boot local after</label>
+            </div>
+            <div class="form-group">
+                <button type="submit">Add Image</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<script>
+function toggleEditImage(id) {
+    var row = document.getElementById('image-row-' + id);
+    var editRow = document.getElementById('image-edit-' + id);
+    if (editRow.style.display === 'none') {
+        row.style.display = 'none';
+        editRow.style.display = 'table-row';
+    } else {
+        row.style.display = 'table-row';
+        editRow.style.display = 'none';
+    }
+}
+</script>
 {{else}}
 <div class="empty">No images configured.</div>
 {{end}}
