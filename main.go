@@ -1,14 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,6 +22,7 @@ import (
 )
 
 const ConsoleServerURL = "http://console.g11.lo"
+const NetworkManagerURL = "http://network.gw.lo"
 
 // Version is set at build time via -ldflags
 var Version = "dev"
@@ -871,6 +873,215 @@ func triggerDiskWipe(hostIP string, allDisks bool) error {
 	return nil
 }
 
+// Baremetalservices IPMI reset - resets IPMI to DHCP and sets credentials
+func baremetalResetIPMI(hostIP, username, password string) error {
+	if hostIP == "" {
+		return fmt.Errorf("no host IP available")
+	}
+
+	url := fmt.Sprintf("http://%s:8080/ipmi/reset", hostIP)
+
+	body := map[string]string{
+		"username": username,
+		"password": password,
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("IPMI reset returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// Baremetalservices get MAC addresses - returns all network interface MACs
+func baremetalGetMACs(hostIP string) ([]map[string]string, error) {
+	if hostIP == "" {
+		return nil, fmt.Errorf("no host IP available")
+	}
+
+	url := fmt.Sprintf("http://%s:8080/network/macs", hostIP)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get MACs returned status %d", resp.StatusCode)
+	}
+
+	var result []map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// API handler for baremetalservices IPMI reset
+func handleAPIBaremetalIPMIReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		http.Error(w, "host parameter required", http.StatusBadRequest)
+		return
+	}
+
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "Host not found", http.StatusNotFound)
+		return
+	}
+
+	hostIP := host.Hostname // Use hostname for DNS resolution
+	if !checkBaremetalReady(hostIP) {
+		http.Error(w, "Host not running baremetalservices", http.StatusBadRequest)
+		return
+	}
+
+	r.ParseForm()
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+	if username == "" {
+		username = "ADMIN"
+	}
+	if password == "" {
+		password = "ADMIN"
+	}
+
+	if err := baremetalResetIPMI(hostIP, username, password); err != nil {
+		logActivity("error", "baremetal", host, fmt.Sprintf("IPMI reset failed: %v", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	logActivity("info", "baremetal", host, fmt.Sprintf("IPMI reset to DHCP with username %s", username))
+
+	// Update host's stored IPMI credentials
+	db.Exec(`UPDATE hosts SET ipmi_username = ?, ipmi_password = ? WHERE hostname = ?`, username, password, hostname)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "IPMI reset to DHCP"})
+}
+
+// API handler for baremetalservices get MACs
+func handleAPIBaremetalGetMACs(w http.ResponseWriter, r *http.Request) {
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		http.Error(w, "host parameter required", http.StatusBadRequest)
+		return
+	}
+
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "Host not found", http.StatusNotFound)
+		return
+	}
+
+	hostIP := host.Hostname
+	if !checkBaremetalReady(hostIP) {
+		http.Error(w, "Host not running baremetalservices", http.StatusBadRequest)
+		return
+	}
+
+	macs, err := baremetalGetMACs(hostIP)
+	if err != nil {
+		logActivity("error", "baremetal", host, fmt.Sprintf("Get MACs failed: %v", err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	logActivity("info", "baremetal", host, fmt.Sprintf("Retrieved %d MAC addresses", len(macs)))
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(macs)
+}
+
+// API handler to auto-discover and register all interfaces from baremetalservices
+func handleAPIBaremetalAutoDiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	hostname := r.URL.Query().Get("host")
+	if hostname == "" {
+		http.Error(w, "host parameter required", http.StatusBadRequest)
+		return
+	}
+
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "Host not found", http.StatusNotFound)
+		return
+	}
+
+	hostIP := host.Hostname
+	if !checkBaremetalReady(hostIP) {
+		http.Error(w, "Host not running baremetalservices", http.StatusBadRequest)
+		return
+	}
+
+	macs, err := baremetalGetMACs(hostIP)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	added := 0
+	for i, iface := range macs {
+		mac := strings.ToLower(iface["mac"])
+		name := iface["name"]
+
+		// Skip if already registered
+		var exists int
+		db.QueryRow(`SELECT COUNT(*) FROM host_interfaces WHERE mac = ?`, mac).Scan(&exists)
+		if exists > 0 {
+			continue
+		}
+
+		// Determine interface letter (a, b, c, etc.)
+		letter := string('a' + i)
+		ifHostname := ""
+		if i == 0 {
+			ifHostname = fmt.Sprintf("%s.g10.lo", hostname)
+		} else {
+			ifHostname = fmt.Sprintf("%s%s.g10.lo", hostname, letter)
+		}
+
+		// Default: enable primary (a), disable others
+		use := i == 0
+
+		_, err := db.Exec(`INSERT INTO host_interfaces (host_id, mac, name, hostname, use) VALUES (?, ?, ?, ?, ?)`,
+			host.ID, mac, name, ifHostname, use)
+		if err == nil {
+			added++
+			logActivity("info", "baremetal", host, fmt.Sprintf("Auto-discovered interface %s: %s (%s)", letter, mac, name))
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "ok",
+		"discovered": len(macs),
+		"added":      added,
+	})
+}
+
 func createEraseWorkflow(mac, targetImage string, eraseBootDrive, eraseAllDrives bool) error {
 	// Cancel any existing workflow for this host
 	db.Exec(`UPDATE workflows SET state = 'cancelled' WHERE mac = ? AND state NOT IN ('completed', 'failed', 'cancelled')`, mac)
@@ -1587,36 +1798,53 @@ func handleAPIHostConfig(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// lookupHostnameByMAC tries to find hostname via DNS/ARP
+// NetworkHost represents a host from the network manager API
+type NetworkHost struct {
+	MACAddress string `json:"mac_address"`
+	Hostname   string `json:"hostname"`
+	DNSName    string `json:"dns_name"`
+	IPAddress  string `json:"ip_address"`
+}
+
+// lookupHostnameByMAC queries the network manager API for hostname by MAC address
 func lookupHostnameByMAC(mac string) string {
-	// Try to find IP from ARP table or DHCP leases
-	// This is a simplified approach - check /var/lib/misc/dnsmasq.leases if available
-	leaseFile := "/var/lib/misc/dnsmasq.leases"
-	data, err := os.ReadFile(leaseFile)
-	if err == nil {
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			fields := strings.Fields(line)
-			if len(fields) >= 4 && strings.EqualFold(fields[1], mac) {
-				// Found MAC, fields[2] is IP, fields[3] is hostname
-				if len(fields) >= 4 && fields[3] != "*" {
-					return fields[3]
+	// Query network manager API
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(NetworkManagerURL + "/api/hosts")
+	if err != nil {
+		log.Printf("Failed to query network manager: %v", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Network manager returned status %d", resp.StatusCode)
+		return ""
+	}
+
+	var hosts []NetworkHost
+	if err := json.NewDecoder(resp.Body).Decode(&hosts); err != nil {
+		log.Printf("Failed to decode network manager response: %v", err)
+		return ""
+	}
+
+	// Find matching MAC (case-insensitive)
+	for _, h := range hosts {
+		if strings.EqualFold(h.MACAddress, mac) {
+			// Prefer hostname field, fall back to dns_name
+			if h.Hostname != "" {
+				return h.Hostname
+			}
+			if h.DNSName != "" {
+				// Extract short hostname from FQDN (e.g., "server1.g10.lo" -> "server1")
+				if idx := strings.Index(h.DNSName, "."); idx > 0 {
+					return h.DNSName[:idx]
 				}
-				// Try reverse DNS on the IP
-				if len(fields) >= 3 {
-					names, err := net.LookupAddr(fields[2])
-					if err == nil && len(names) > 0 {
-						hostname := strings.TrimSuffix(names[0], ".")
-						// Remove domain suffix if present
-						if idx := strings.Index(hostname, "."); idx > 0 {
-							return hostname[:idx]
-						}
-						return hostname
-					}
-				}
+				return h.DNSName
 			}
 		}
 	}
+
 	return ""
 }
 
@@ -2538,6 +2766,11 @@ func main() {
 
 	// Console routes
 	http.HandleFunc("/api/host/console/rotate", handleAPIHostConsoleRotate)
+
+	// Baremetalservices routes
+	http.HandleFunc("/api/host/baremetal/reset-ipmi", handleAPIBaremetalIPMIReset)
+	http.HandleFunc("/api/host/baremetal/get-macs", handleAPIBaremetalGetMACs)
+	http.HandleFunc("/api/host/baremetal/auto-discover", handleAPIBaremetalAutoDiscover)
 
 	// Workflow routes
 	http.HandleFunc("/api/workflows", handleAPIWorkflows)

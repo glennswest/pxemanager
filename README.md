@@ -13,6 +13,60 @@ A lightweight PXE boot manager with HTMX web UI, IPMI integration, and Redfish A
 - **Console Integration**: Automatic log rotation on console server
 - **Boot Cycling**: Automated multi-step boot sequences (BIOS update, disk wipe, etc.)
 
+## Infrastructure
+
+### Network Services
+
+| Service | Host | Description |
+|---------|------|-------------|
+| DNS | `root@dnsx.gw.lo` | PowerDNS authoritative DNS server |
+| DHCP | `root@rose1.gw.lo` | MikroTik router with DHCP reservations |
+| PXE Manager | `pxe.gw.lo` | This application |
+| Console Server | `console.g11.lo` | Serial console log server |
+
+### IPMI Network Convention
+
+- IPMI/BMC addresses follow pattern: `{hostname}.g11.lo`
+- Example: server3 → IPMI at `server3.g11.lo`
+- Default credentials: `ADMIN/ADMIN`
+
+### Hostname Resolution
+
+Hostnames are resolved via the Network Manager API:
+1. **Network Manager API** - `http://network.gw.lo/api/hosts` returns all hosts with MAC→hostname mapping
+2. **Manual configuration** - Set hostname directly in PXE Manager UI
+
+The Network Manager aggregates data from:
+- MikroTik DHCP reservations (rose1.gw.lo)
+- PowerDNS records (dnsx.gw.lo)
+
+### Network Manager Scan API
+
+Trigger scans to refresh host data:
+
+```bash
+# Refresh DHCP leases from MikroTik
+curl -X POST http://network.gw.lo/api/scan/dhcp
+
+# Refresh DNS records from PowerDNS
+curl -X POST http://network.gw.lo/api/scan/dns
+
+# Ping scan to check online status
+curl -X POST http://network.gw.lo/api/scan/ping
+
+# Switch scan (MAC table discovery)
+curl -X POST http://network.gw.lo/api/scan/switch
+```
+
+### Adding a New Server
+
+1. Create DHCP reservation on rose1.gw.lo (MikroTik)
+2. Add DNS A record on dnsx.gw.lo (PowerDNS)
+3. Add IPMI DNS record: `{hostname}.g11.lo` pointing to BMC IP
+4. Server auto-registers on first PXE boot
+5. Click "Lookup Hostnames" or manually set hostname in UI
+6. Click "Auto Configure IPMI" to set IPMI address
+
 ## Architecture
 
 ```
