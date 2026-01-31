@@ -171,6 +171,7 @@ func initDB() error {
 		ipmi_username TEXT DEFAULT 'ADMIN',
 		ipmi_password TEXT DEFAULT 'ADMIN',
 		console_id TEXT,
+		virtual_media_url TEXT,
 		created DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (current_image) REFERENCES images(name)
 	);
@@ -262,6 +263,7 @@ func initDB() error {
 		"ALTER TABLE hosts ADD COLUMN ipmi_username TEXT DEFAULT 'ADMIN'",
 		"ALTER TABLE hosts ADD COLUMN ipmi_password TEXT DEFAULT 'ADMIN'",
 		"ALTER TABLE hosts ADD COLUMN console_id TEXT",
+		"ALTER TABLE hosts ADD COLUMN virtual_media_url TEXT",
 	}
 	for _, stmt := range alterStatements {
 		db.Exec(stmt) // Ignore errors (column may already exist)
@@ -2048,6 +2050,448 @@ func handleAPICyclePreset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// Redfish API handlers for OpenShift Bare Metal Operator compatibility
+func handleRedfishRoot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"@odata.type": "#ServiceRoot.v1_5_0.ServiceRoot",
+		"@odata.id":   "/redfish/v1",
+		"Id":          "RootService",
+		"Name":        "PXE Manager Redfish Service",
+		"RedfishVersion": "1.6.0",
+		"Systems": map[string]string{
+			"@odata.id": "/redfish/v1/Systems",
+		},
+	})
+}
+
+func handleRedfishSystems(w http.ResponseWriter, r *http.Request) {
+	hosts, _ := getHosts()
+
+	members := make([]map[string]string, 0)
+	for _, h := range hosts {
+		if h.Hostname != "" && h.IPMIIP != nil {
+			members = append(members, map[string]string{
+				"@odata.id": fmt.Sprintf("/redfish/v1/Systems/%s", h.Hostname),
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"@odata.type":      "#ComputerSystemCollection.ComputerSystemCollection",
+		"@odata.id":        "/redfish/v1/Systems",
+		"Name":             "Computer System Collection",
+		"Members@odata.count": len(members),
+		"Members":          members,
+	})
+}
+
+func handleRedfishSystem(w http.ResponseWriter, r *http.Request) {
+	// Extract hostname from path: /redfish/v1/Systems/{hostname}
+	path := r.URL.Path
+	parts := strings.Split(strings.TrimPrefix(path, "/redfish/v1/Systems/"), "/")
+	hostname := parts[0]
+
+	if hostname == "" {
+		http.Error(w, "System ID required", http.StatusBadRequest)
+		return
+	}
+
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "System not found", http.StatusNotFound)
+		return
+	}
+
+	// Get power state
+	powerState := "Off"
+	if host.IPMIIP != nil && *host.IPMIIP != "" {
+		status, err := ipmiPowerStatus(host)
+		if err == nil && status == "on" {
+			powerState = "On"
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"@odata.type": "#ComputerSystem.v1_13_0.ComputerSystem",
+		"@odata.id":   fmt.Sprintf("/redfish/v1/Systems/%s", hostname),
+		"Id":          hostname,
+		"Name":        hostname,
+		"PowerState":  powerState,
+		"Boot": map[string]interface{}{
+			"BootSourceOverrideEnabled": "Once",
+			"BootSourceOverrideTarget":  "Pxe",
+			"BootSourceOverrideTarget@Redfish.AllowableValues": []string{"None", "Pxe", "Hdd"},
+		},
+		"Actions": map[string]interface{}{
+			"#ComputerSystem.Reset": map[string]interface{}{
+				"target": fmt.Sprintf("/redfish/v1/Systems/%s/Actions/ComputerSystem.Reset", hostname),
+				"ResetType@Redfish.AllowableValues": []string{"On", "ForceOff", "ForceRestart", "PushPowerButton"},
+			},
+		},
+	})
+}
+
+func handleRedfishSystemAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract hostname from path: /redfish/v1/Systems/{hostname}/Actions/ComputerSystem.Reset
+	path := r.URL.Path
+	parts := strings.Split(strings.TrimPrefix(path, "/redfish/v1/Systems/"), "/")
+	hostname := parts[0]
+
+	if hostname == "" {
+		http.Error(w, "System ID required", http.StatusBadRequest)
+		return
+	}
+
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "System not found", http.StatusNotFound)
+		return
+	}
+
+	if host.IPMIIP == nil || *host.IPMIIP == "" {
+		http.Error(w, "IPMI not configured", http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		ResetType string `json:"ResetType"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var actionErr error
+	switch body.ResetType {
+	case "On":
+		actionErr = ipmiPowerOn(host)
+		logActivity("info", "redfish", host, "Power on via Redfish API")
+	case "ForceOff", "GracefulShutdown":
+		actionErr = ipmiPowerOff(host)
+		logActivity("info", "redfish", host, "Power off via Redfish API")
+	case "ForceRestart", "GracefulRestart":
+		actionErr = ipmiRestart(host)
+		logActivity("info", "redfish", host, "Restart via Redfish API")
+	case "PushPowerButton":
+		// Toggle power
+		status, _ := ipmiPowerStatus(host)
+		if status == "on" {
+			actionErr = ipmiPowerOff(host)
+		} else {
+			actionErr = ipmiPowerOn(host)
+		}
+		logActivity("info", "redfish", host, "Power button via Redfish API")
+	default:
+		http.Error(w, fmt.Sprintf("Unsupported ResetType: %s", body.ResetType), http.StatusBadRequest)
+		return
+	}
+
+	if actionErr != nil {
+		http.Error(w, actionErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Router for /redfish/v1/Systems/{hostname}/...
+func handleRedfishSystemRouter(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/redfish/v1/Systems/")
+	parts := strings.Split(path, "/")
+	hostname := parts[0]
+
+	if hostname == "" {
+		handleRedfishSystems(w, r)
+		return
+	}
+
+	if len(parts) == 1 {
+		// GET/PATCH /redfish/v1/Systems/{hostname}
+		if r.Method == "PATCH" {
+			handleRedfishSystemPatch(w, r, hostname)
+		} else {
+			handleRedfishSystem(w, r)
+		}
+		return
+	}
+
+	// Route based on sub-path
+	subPath := strings.Join(parts[1:], "/")
+	switch {
+	case subPath == "Actions/ComputerSystem.Reset":
+		handleRedfishSystemAction(w, r)
+	case strings.HasPrefix(subPath, "VirtualMedia"):
+		handleRedfishVirtualMedia(w, r, hostname, subPath)
+	case subPath == "Thermal":
+		handleRedfishThermal(w, r, hostname)
+	case subPath == "Power":
+		handleRedfishPower(w, r, hostname)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func handleRedfishSystemPatch(w http.ResponseWriter, r *http.Request, hostname string) {
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "System not found", http.StatusNotFound)
+		return
+	}
+
+	var body struct {
+		Boot struct {
+			BootSourceOverrideTarget  string `json:"BootSourceOverrideTarget"`
+			BootSourceOverrideEnabled string `json:"BootSourceOverrideEnabled"`
+		} `json:"Boot"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if host.IPMIIP != nil && *host.IPMIIP != "" {
+		switch body.Boot.BootSourceOverrideTarget {
+		case "Pxe":
+			ipmiSetBootPXE(host)
+			logActivity("info", "redfish", host, "Set boot to PXE via Redfish API")
+		case "Hdd":
+			ipmiSetBootDisk(host)
+			logActivity("info", "redfish", host, "Set boot to HDD via Redfish API")
+		case "Cd":
+			// Virtual CD - will be handled via VirtualMedia
+			logActivity("info", "redfish", host, "Set boot to CD via Redfish API")
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Virtual Media for ISO mounting
+func handleRedfishVirtualMedia(w http.ResponseWriter, r *http.Request, hostname, subPath string) {
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "System not found", http.StatusNotFound)
+		return
+	}
+
+	parts := strings.Split(subPath, "/")
+
+	// GET /VirtualMedia - list virtual media devices
+	if len(parts) == 1 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"@odata.type":         "#VirtualMediaCollection.VirtualMediaCollection",
+			"@odata.id":           fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia", hostname),
+			"Name":                "Virtual Media Collection",
+			"Members@odata.count": 1,
+			"Members": []map[string]string{
+				{"@odata.id": fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/CD1", hostname)},
+			},
+		})
+		return
+	}
+
+	mediaID := parts[1]
+
+	// Actions on virtual media
+	if len(parts) >= 3 && parts[2] == "Actions" {
+		if r.Method != "POST" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		action := ""
+		if len(parts) >= 4 {
+			action = parts[3]
+		}
+
+		switch action {
+		case "VirtualMedia.InsertMedia":
+			var body struct {
+				Image          string `json:"Image"`
+				Inserted       bool   `json:"Inserted"`
+				WriteProtected bool   `json:"WriteProtected"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+
+			// Store the ISO URL for this host
+			db.Exec(`UPDATE hosts SET virtual_media_url = ? WHERE hostname = ?`, body.Image, hostname)
+			logActivity("info", "redfish", host, fmt.Sprintf("Inserted virtual media: %s", body.Image))
+
+			w.WriteHeader(http.StatusNoContent)
+			return
+
+		case "VirtualMedia.EjectMedia":
+			db.Exec(`UPDATE hosts SET virtual_media_url = NULL WHERE hostname = ?`, hostname)
+			logActivity("info", "redfish", host, "Ejected virtual media")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	// GET /VirtualMedia/{id}
+	var virtualMediaURL sql.NullString
+	db.QueryRow(`SELECT virtual_media_url FROM hosts WHERE hostname = ?`, hostname).Scan(&virtualMediaURL)
+
+	inserted := virtualMediaURL.Valid && virtualMediaURL.String != ""
+	imageURL := ""
+	if inserted {
+		imageURL = virtualMediaURL.String
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"@odata.type":    "#VirtualMedia.v1_3_0.VirtualMedia",
+		"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s", hostname, mediaID),
+		"Id":             mediaID,
+		"Name":           "Virtual CD",
+		"MediaTypes":     []string{"CD", "DVD"},
+		"Image":          imageURL,
+		"Inserted":       inserted,
+		"WriteProtected": true,
+		"Actions": map[string]interface{}{
+			"#VirtualMedia.InsertMedia": map[string]string{
+				"target": fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.InsertMedia", hostname, mediaID),
+			},
+			"#VirtualMedia.EjectMedia": map[string]string{
+				"target": fmt.Sprintf("/redfish/v1/Systems/%s/VirtualMedia/%s/Actions/VirtualMedia.EjectMedia", hostname, mediaID),
+			},
+		},
+	})
+}
+
+// Thermal/temperature data
+func handleRedfishThermal(w http.ResponseWriter, r *http.Request, hostname string) {
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "System not found", http.StatusNotFound)
+		return
+	}
+
+	temperatures := []map[string]interface{}{}
+	fans := []map[string]interface{}{}
+
+	// Get sensor data via IPMI
+	if host.IPMIIP != nil && *host.IPMIIP != "" {
+		client, err := getIPMIClient(host)
+		if err == nil {
+			defer client.Close(context.Background())
+
+			sensors, err := client.GetSensors(context.Background())
+			if err == nil {
+				tempIdx := 0
+				fanIdx := 0
+				for _, sensor := range sensors {
+					// Temperature sensors (SensorType 0x01)
+					if sensor.SensorType == 0x01 {
+						temperatures = append(temperatures, map[string]interface{}{
+							"@odata.id":      fmt.Sprintf("/redfish/v1/Systems/%s/Thermal#/Temperatures/%d", hostname, tempIdx),
+							"MemberId":       fmt.Sprintf("%d", tempIdx),
+							"Name":           sensor.Name,
+							"ReadingCelsius": sensor.Value,
+							"Status":         map[string]string{"State": "Enabled", "Health": "OK"},
+						})
+						tempIdx++
+					}
+					// Fan sensors (SensorType 0x04)
+					if sensor.SensorType == 0x04 {
+						fans = append(fans, map[string]interface{}{
+							"@odata.id":    fmt.Sprintf("/redfish/v1/Systems/%s/Thermal#/Fans/%d", hostname, fanIdx),
+							"MemberId":     fmt.Sprintf("%d", fanIdx),
+							"Name":         sensor.Name,
+							"Reading":      int(sensor.Value),
+							"ReadingUnits": "RPM",
+							"Status":       map[string]string{"State": "Enabled", "Health": "OK"},
+						})
+						fanIdx++
+					}
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"@odata.type":  "#Thermal.v1_6_0.Thermal",
+		"@odata.id":    fmt.Sprintf("/redfish/v1/Systems/%s/Thermal", hostname),
+		"Id":           "Thermal",
+		"Name":         "Thermal",
+		"Temperatures": temperatures,
+		"Fans":         fans,
+	})
+}
+
+// Power data
+func handleRedfishPower(w http.ResponseWriter, r *http.Request, hostname string) {
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		http.Error(w, "System not found", http.StatusNotFound)
+		return
+	}
+
+	powerSupplies := []map[string]interface{}{}
+	powerControl := []map[string]interface{}{}
+
+	// Get sensor data via IPMI
+	if host.IPMIIP != nil && *host.IPMIIP != "" {
+		client, err := getIPMIClient(host)
+		if err == nil {
+			defer client.Close(context.Background())
+
+			sensors, err := client.GetSensors(context.Background())
+			if err == nil {
+				psuIdx := 0
+				pwrIdx := 0
+				for _, sensor := range sensors {
+					// Power Supply sensors (SensorType 0x08)
+					if sensor.SensorType == 0x08 {
+						powerSupplies = append(powerSupplies, map[string]interface{}{
+							"@odata.id":        fmt.Sprintf("/redfish/v1/Systems/%s/Power#/PowerSupplies/%d", hostname, psuIdx),
+							"MemberId":         fmt.Sprintf("%d", psuIdx),
+							"Name":             sensor.Name,
+							"PowerOutputWatts": sensor.Value,
+							"Status":           map[string]string{"State": "Enabled", "Health": "OK"},
+						})
+						psuIdx++
+					}
+					// Current/Power sensors (SensorType 0x03 for current, 0x08 for power)
+					if sensor.SensorType == 0x03 || (sensor.SensorType == 0x08 && sensor.SensorUnit.BaseUnit == 0x06) {
+						powerControl = append(powerControl, map[string]interface{}{
+							"@odata.id":            fmt.Sprintf("/redfish/v1/Systems/%s/Power#/PowerControl/%d", hostname, pwrIdx),
+							"MemberId":             fmt.Sprintf("%d", pwrIdx),
+							"Name":                 sensor.Name,
+							"PowerConsumedWatts":   sensor.Value,
+							"Status":               map[string]string{"State": "Enabled", "Health": "OK"},
+						})
+						pwrIdx++
+					}
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"@odata.type":   "#Power.v1_6_0.Power",
+		"@odata.id":     fmt.Sprintf("/redfish/v1/Systems/%s/Power", hostname),
+		"Id":            "Power",
+		"Name":          "Power",
+		"PowerSupplies": powerSupplies,
+		"PowerControl":  powerControl,
+	})
+}
+
 func main() {
 	// Initialize database
 	if err := initDB(); err != nil {
@@ -2108,6 +2552,12 @@ func main() {
 
 	// Activity log routes
 	http.HandleFunc("/api/activity", handleAPIActivity)
+
+	// Redfish API routes (for OpenShift Bare Metal Operator)
+	http.HandleFunc("/redfish/v1", handleRedfishRoot)
+	http.HandleFunc("/redfish/v1/", handleRedfishRoot)
+	http.HandleFunc("/redfish/v1/Systems", handleRedfishSystems)
+	http.HandleFunc("/redfish/v1/Systems/", handleRedfishSystemRouter)
 
 	// HTMX partial routes
 	http.HandleFunc("/partials/hosts", handleHostsTable)
