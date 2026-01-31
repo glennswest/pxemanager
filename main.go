@@ -1441,9 +1441,12 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger activity log refresh (but not hosts table to avoid race conditions)
-	w.Header().Set("HX-Trigger", "activityUpdated")
-	w.WriteHeader(http.StatusOK)
+	// Return activity table as out-of-band swap for immediate update
+	w.Header().Set("Content-Type", "text/html")
+	logs, _ := getActivityLogs(50)
+	fmt.Fprint(w, `<div id="activity-table" hx-swap-oob="innerHTML">`)
+	templates.ExecuteTemplate(w, "activity_log.html", logs)
+	fmt.Fprint(w, `</div>`)
 }
 
 func handleAPIHostIPMIStatus(w http.ResponseWriter, r *http.Request) {

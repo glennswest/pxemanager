@@ -2,3 +2,4 @@ pxemanager
 pxemanager-arm64
 pxemanager-linux
 pxemanager.db
+.last-deploy

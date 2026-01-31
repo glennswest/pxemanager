@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PXE Manager</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph-ext.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -226,7 +227,7 @@
         .detail-value { color: #eee; font-family: monospace; }
     </style>
 </head>
-<body hx-headers='{"Content-Type": "application/x-www-form-urlencoded"}'>
+<body hx-headers='{"Content-Type": "application/x-www-form-urlencoded"}' hx-ext="morph">
     <header>
         <h1>PXE Manager <span class="version">v{{.Version}}</span></h1>
     </header>
@@ -247,7 +248,7 @@
 
         <div class="activity-section">
             <h2>Activity Log</h2>
-            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s, activityUpdated from:body" hx-swap="innerHTML show:none">
+            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s" hx-swap="morph:innerHTML">
             </div>
         </div>
     </div>
