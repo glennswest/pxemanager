@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -902,12 +903,12 @@ func baremetalResetIPMI(hostIP, username, password string) error {
 }
 
 // Baremetalservices get MAC addresses - returns all network interface MACs
-func baremetalGetMACs(hostIP string) ([]map[string]string, error) {
+func baremetalGetMACs(hostIP string) (map[string]string, error) {
 	if hostIP == "" {
 		return nil, fmt.Errorf("no host IP available")
 	}
 
-	url := fmt.Sprintf("http://%s:8080/network/macs", hostIP)
+	url := fmt.Sprintf("http://%s:8080/macs", hostIP)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
@@ -920,12 +921,19 @@ func baremetalGetMACs(hostIP string) ([]map[string]string, error) {
 		return nil, fmt.Errorf("get MACs returned status %d", resp.StatusCode)
 	}
 
-	var result []map[string]string
+	var result struct {
+		Status string            `json:"status"`
+		Data   map[string]string `json:"data"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
-	return result, nil
+	if result.Status != "ok" {
+		return nil, fmt.Errorf("get MACs returned status: %s", result.Status)
+	}
+
+	return result.Data, nil
 }
 
 // API handler for baremetalservices IPMI reset
@@ -1042,10 +1050,18 @@ func handleAPIBaremetalAutoDiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sort interface names for consistent ordering
+	var names []string
+	for name := range macs {
+		if name != "ipmi" { // Skip IPMI interface for PXE
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
 	added := 0
-	for i, iface := range macs {
-		mac := strings.ToLower(iface["mac"])
-		name := iface["name"]
+	for i, name := range names {
+		mac := strings.ToLower(macs[name])
 
 		// Skip if already registered
 		var exists int
@@ -1077,7 +1093,7 @@ func handleAPIBaremetalAutoDiscover(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":     "ok",
-		"discovered": len(macs),
+		"discovered": len(names),
 		"added":      added,
 	})
 }
