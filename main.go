@@ -597,20 +597,17 @@ func ipmiPowerOn(host *Host) error {
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerUp)
 	if err == nil {
 		logActivity("info", "ipmi", host, "Power on command sent (PXE boot)")
-		// Rotate console logs on power on - use image name
 		if host.Hostname != "" {
-			go func() {
-				imageName := host.CurrentImage
-				if host.NextImage != nil && *host.NextImage != "" {
-					imageName = *host.NextImage
-				}
-				label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
-				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-					log.Printf("Failed to rotate console logs for %s: %v", host.Hostname, err)
-				} else {
-					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-				}
-			}()
+			imageName := host.CurrentImage
+			if host.NextImage != nil && *host.NextImage != "" {
+				imageName = *host.NextImage
+			}
+			label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
+			if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+				logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
+			} else {
+				logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+			}
 		}
 	}
 	return err
@@ -626,16 +623,13 @@ func ipmiPowerOff(host *Host) error {
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerDown)
 	if err == nil {
 		logActivity("info", "ipmi", host, "Power off command sent")
-		// Rotate console logs on power off - start unused log in case of external events
 		if host.Hostname != "" {
-			go func() {
-				label := fmt.Sprintf("unused-%s", time.Now().Format("20060102-150405"))
-				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-					log.Printf("Failed to rotate console logs for %s: %v", host.Hostname, err)
-				} else {
-					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-				}
-			}()
+			label := fmt.Sprintf("unused-%s", time.Now().Format("20060102-150405"))
+			if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+				logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
+			} else {
+				logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+			}
 		}
 	}
 	return err
@@ -654,20 +648,17 @@ func ipmiRestart(host *Host) error {
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerCycle)
 	if err == nil {
 		logActivity("info", "ipmi", host, "Power cycle command sent (PXE boot)")
-		// Rotate console logs on restart - use image name
 		if host.Hostname != "" {
-			go func() {
-				imageName := host.CurrentImage
-				if host.NextImage != nil && *host.NextImage != "" {
-					imageName = *host.NextImage
-				}
-				label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
-				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-					log.Printf("Failed to rotate console logs for %s: %v", host.Hostname, err)
-				} else {
-					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-				}
-			}()
+			imageName := host.CurrentImage
+			if host.NextImage != nil && *host.NextImage != "" {
+				imageName = *host.NextImage
+			}
+			label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
+			if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+				logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
+			} else {
+				logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+			}
 		}
 	}
 	return err
@@ -703,9 +694,10 @@ func ipmiSetBootDisk(host *Host) error {
 
 // Console server integration
 func rotateConsoleLogs(hostname, label string) error {
-	url := fmt.Sprintf("%s/api/servers/%s/logs/rotate?name=%s",
+	reqURL := fmt.Sprintf("%s/api/servers/%s/logs/rotate?name=%s",
 		ConsoleServerURL, hostname, url.QueryEscape(label))
-	resp, err := http.Post(url, "application/json", nil)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(reqURL, "application/json", nil)
 	if err != nil {
 		return err
 	}
