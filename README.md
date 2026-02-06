@@ -7,11 +7,11 @@ A lightweight PXE boot manager with HTMX web UI, IPMI integration, and Redfish A
 - **Web UI**: Real-time HTMX-based interface for managing hosts and boot images
 - **Multi-NIC Support**: Track multiple network interfaces per host with selective PXE boot
 - **IPMI Control**: Pure Go IPMI implementation for power management (no ipmitool required)
-- **Redfish API**: OpenShift Bare Metal Operator compatible REST API
-- **Virtual Media**: Mount ISOs via Redfish for OS installation
+- **ISO Boot**: Boot directly from remote ISO URLs via iPXE sanboot
 - **Activity Logging**: Real-time activity tracking with instant UI updates
 - **Console Integration**: Automatic log rotation on console server
 - **Boot Cycling**: Automated multi-step boot sequences (BIOS update, disk wipe, etc.)
+- **REST API**: Full API for automation and integration
 
 ## Infrastructure
 
@@ -73,15 +73,15 @@ curl -X POST http://network.gw.lo/api/scan/switch
 ┌─────────────────────────────────────────────────────────────────┐
 │                         PXE Manager                              │
 ├─────────────────────────────────────────────────────────────────┤
-│  Web UI (HTMX)  │  Redfish API  │  iPXE Handler  │  IPMI Client │
+│  Web UI (HTMX)  │  REST API  │  iPXE Handler  │  IPMI Client    │
 ├─────────────────────────────────────────────────────────────────┤
 │                      SQLite Database                             │
 └─────────────────────────────────────────────────────────────────┘
          │                    │                    │
          ▼                    ▼                    ▼
     ┌─────────┐         ┌──────────┐        ┌───────────┐
-    │ Browser │         │ OpenShift│        │  Servers  │
-    │   UI    │         │   BMO    │        │  (iPXE)   │
+    │ Browser │         │ Scripts/ │        │  Servers  │
+    │   UI    │         │ Automation│       │  (iPXE)   │
     └─────────┘         └──────────┘        └───────────┘
 ```
 
@@ -189,10 +189,10 @@ CREATE TABLE host_interfaces (
 -- Boot images
 CREATE TABLE images (
     name TEXT PRIMARY KEY,
-    kernel TEXT NOT NULL,
+    kernel TEXT NOT NULL,               -- For ISO type, this contains the full URL
     initrd TEXT,
     append TEXT,
-    type TEXT DEFAULT 'linux',          -- linux, local, memdisk
+    type TEXT DEFAULT 'linux',          -- linux, iso, local, memdisk
     erase_boot_drive BOOLEAN DEFAULT 0,
     erase_all_drives BOOLEAN DEFAULT 0,
     boot_local_after BOOLEAN DEFAULT 0  -- Set IPMI to boot disk after
@@ -204,7 +204,11 @@ CREATE TABLE images (
 1. Server PXE boots, loads `undionly.kpxe` from TFTP
 2. Embedded script chains to `http://<pxemanager>/ipxe?mac=${net0/mac}`
 3. PXE Manager looks up host by MAC (checking interfaces table)
-4. Returns iPXE script with kernel, initrd, and append parameters
+4. Returns iPXE script based on image type:
+   - **linux**: kernel + initrd + append parameters
+   - **iso**: `sanboot <url>` to boot directly from ISO
+   - **memdisk**: kernel with memdisk for floppy/ISO images
+   - **local**: `exit` to boot from local disk
 5. If `next_image` is set, uses it once then clears
 6. If `cycle_images` is set, advances through the cycle
 
@@ -274,339 +278,65 @@ POST /api/image/update
 POST /api/image/delete?name=oldimage
 ```
 
-## Redfish API
+### ISO Images
 
-The Redfish API provides OpenShift Bare Metal Operator compatibility.
-
-### Service Root
+Add ISO images that boot directly from a URL via iPXE `sanboot`:
 
 ```bash
-GET /redfish/v1
+# Add an ISO image (appears as selectable boot target)
+POST /api/image/iso
+     name=rhel9-installer&url=http://fastregistry.gw.lo/isos/rhel9.iso
+
+# List all ISO images
+GET /api/image/iso
+
+# Response:
+[
+  {"name": "rhel9-installer", "url": "http://fastregistry.gw.lo/isos/rhel9.iso"},
+  {"name": "ubuntu-22.04", "url": "http://fastregistry.gw.lo/isos/ubuntu-22.04.iso"}
+]
 ```
 
-```json
+ISO images can also be added via the Web UI:
+1. Go to **Images** tab
+2. Select type **iso** from dropdown
+3. Enter name and full ISO URL
+4. Click **Add Image**
+
+When a host boots an ISO image, the generated iPXE script uses:
+```
+#!ipxe
+echo Booting rhel9-installer for server1 (aa:bb:cc:dd:ee:ff)
+sanboot http://fastregistry.gw.lo/isos/rhel9.iso
+```
+
+## Baremetalservices Integration
+
+PXE Manager integrates with `baremetalservices` running on booted hosts for:
+
+### IPMI Reset to DHCP
+
+```bash
+# Reset IPMI to DHCP (useful for initial setup)
+POST /api/host/baremetal/reset-ipmi?host=server1
+     username=ADMIN&password=ADMIN
+```
+
+### MAC Address Discovery
+
+```bash
+# Get all MAC addresses from a running host
+GET /api/host/baremetal/get-macs?host=server1
+
+# Response:
 {
-  "@odata.type": "#ServiceRoot.v1_5_0.ServiceRoot",
-  "@odata.id": "/redfish/v1",
-  "Id": "RootService",
-  "Name": "PXE Manager Redfish Service",
-  "RedfishVersion": "1.6.0",
-  "Systems": {"@odata.id": "/redfish/v1/Systems"}
-}
-```
-
-### Systems Collection
-
-```bash
-GET /redfish/v1/Systems
-```
-
-```json
-{
-  "@odata.type": "#ComputerSystemCollection.ComputerSystemCollection",
-  "Members": [
-    {"@odata.id": "/redfish/v1/Systems/server1"},
-    {"@odata.id": "/redfish/v1/Systems/server2"}
-  ],
-  "Members@odata.count": 2
-}
-```
-
-### Individual System
-
-```bash
-GET /redfish/v1/Systems/server1
-```
-
-```json
-{
-  "@odata.type": "#ComputerSystem.v1_13_0.ComputerSystem",
-  "@odata.id": "/redfish/v1/Systems/server1",
-  "Id": "server1",
-  "Name": "server1",
-  "PowerState": "On",
-  "Boot": {
-    "BootSourceOverrideEnabled": "Once",
-    "BootSourceOverrideTarget": "Pxe",
-    "BootSourceOverrideTarget@Redfish.AllowableValues": ["None", "Pxe", "Hdd"]
-  },
-  "Actions": {
-    "#ComputerSystem.Reset": {
-      "target": "/redfish/v1/Systems/server1/Actions/ComputerSystem.Reset",
-      "ResetType@Redfish.AllowableValues": ["On", "ForceOff", "ForceRestart", "PushPowerButton"]
-    }
-  }
-}
-```
-
-### Power Control
-
-```bash
-# Power on
-POST /redfish/v1/Systems/server1/Actions/ComputerSystem.Reset
-Content-Type: application/json
-{"ResetType": "On"}
-
-# Power off
-POST /redfish/v1/Systems/server1/Actions/ComputerSystem.Reset
-{"ResetType": "ForceOff"}
-
-# Restart
-POST /redfish/v1/Systems/server1/Actions/ComputerSystem.Reset
-{"ResetType": "ForceRestart"}
-```
-
-### Set Boot Device
-
-```bash
-PATCH /redfish/v1/Systems/server1
-Content-Type: application/json
-{
-  "Boot": {
-    "BootSourceOverrideTarget": "Pxe",
-    "BootSourceOverrideEnabled": "Once"
-  }
-}
-```
-
-### Virtual Media (ISO Mount)
-
-```bash
-# List virtual media
-GET /redfish/v1/Systems/server1/VirtualMedia
-
-# Get CD device
-GET /redfish/v1/Systems/server1/VirtualMedia/CD1
-
-# Mount ISO
-POST /redfish/v1/Systems/server1/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia
-Content-Type: application/json
-{
-  "Image": "http://fileserver/rhcos-live.iso",
-  "Inserted": true,
-  "WriteProtected": true
+  "eth0": "aa:bb:cc:dd:ee:f0",
+  "eth1": "aa:bb:cc:dd:ee:f1",
+  "ipmi": "aa:bb:cc:dd:ee:f2"
 }
 
-# Eject ISO
-POST /redfish/v1/Systems/server1/VirtualMedia/CD1/Actions/VirtualMedia.EjectMedia
-```
-
-### Thermal Data
-
-```bash
-GET /redfish/v1/Systems/server1/Thermal
-```
-
-```json
-{
-  "@odata.type": "#Thermal.v1_6_0.Thermal",
-  "Temperatures": [
-    {"Name": "CPU Temp", "ReadingCelsius": 45, "Status": {"Health": "OK"}}
-  ],
-  "Fans": [
-    {"Name": "Fan 1", "Reading": 5400, "ReadingUnits": "RPM"}
-  ]
-}
-```
-
-### Power Data
-
-```bash
-GET /redfish/v1/Systems/server1/Power
-```
-
-```json
-{
-  "@odata.type": "#Power.v1_6_0.Power",
-  "PowerSupplies": [
-    {"Name": "PSU 1", "PowerOutputWatts": 450, "Status": {"Health": "OK"}}
-  ],
-  "PowerControl": [
-    {"Name": "System Power", "PowerConsumedWatts": 285}
-  ]
-}
-```
-
-## OpenShift Bare Metal Operator Setup
-
-### Prerequisites
-
-1. OpenShift cluster with Bare Metal Operator installed
-2. PXE Manager accessible from the cluster
-3. RHCOS images served via HTTP
-
-### Create BMC Secret
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: server1-bmc-secret
-  namespace: openshift-machine-api
-type: Opaque
-data:
-  username: YWRtaW4=      # base64 encoded: admin
-  password: cGFzc3dvcmQ=  # base64 encoded: password
-```
-
-### Create BareMetalHost
-
-```yaml
-apiVersion: metal3.io/v1alpha1
-kind: BareMetalHost
-metadata:
-  name: server1
-  namespace: openshift-machine-api
-spec:
-  online: true
-  bootMACAddress: ac:1f:6b:8a:a7:9c
-
-  bmc:
-    address: redfish-virtualmedia://pxe.example.com:8080/redfish/v1/Systems/server1
-    credentialsName: server1-bmc-secret
-    disableCertificateVerification: true
-
-  rootDeviceHints:
-    deviceName: /dev/sda
-
-  # For automated provisioning
-  automatedCleaningMode: disabled
-```
-
-### Complete BareMetalHost with Provisioning
-
-```yaml
-apiVersion: metal3.io/v1alpha1
-kind: BareMetalHost
-metadata:
-  name: server1
-  namespace: openshift-machine-api
-  labels:
-    cluster.example.com/cluster-name: my-cluster
-spec:
-  online: true
-  bootMACAddress: ac:1f:6b:8a:a7:9c
-
-  bmc:
-    address: redfish-virtualmedia://pxe.example.com:8080/redfish/v1/Systems/server1
-    credentialsName: server1-bmc-secret
-    disableCertificateVerification: true
-
-  bootMode: UEFI   # or legacy
-
-  rootDeviceHints:
-    deviceName: /dev/sda
-    # Or use WWN:
-    # wwn: "0x50014ee2b5e3a1c0"
-
-  # Automated cleaning (disk wipe before provisioning)
-  automatedCleaningMode: metadata  # or "disabled"
-
-  # Custom deploy kernel/ramdisk (optional)
-  # preprovisioningNetworkDataName: server1-network
-
-  # For inspection data
-  hardwareProfile: ""
-
-  # Image to provision (for manual provisioning)
-  image:
-    url: http://fileserver/rhcos-live.iso
-    checksum: sha256:abc123...
-    checksumType: sha256
-    format: live-iso
-```
-
-### Provisioning with Cluster API
-
-```yaml
-apiVersion: cluster.x-k8s.io/v1beta1
-kind: Machine
-metadata:
-  name: server1
-  namespace: openshift-machine-api
-  labels:
-    cluster.x-k8s.io/cluster-name: my-cluster
-spec:
-  clusterName: my-cluster
-  infrastructureRef:
-    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-    kind: Metal3Machine
-    name: server1
-  bootstrap:
-    configRef:
-      apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-      kind: KubeadmConfig
-      name: server1-bootstrap
----
-apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
-kind: Metal3Machine
-metadata:
-  name: server1
-  namespace: openshift-machine-api
-spec:
-  image:
-    url: http://fileserver/rhcos-live.iso
-    checksum: sha256:abc123...
-    checksumType: sha256
-    format: live-iso
-  hostSelector:
-    matchLabels:
-      cluster.example.com/cluster-name: my-cluster
-```
-
-### Agent-Based Installation
-
-For OpenShift Agent-Based Installer:
-
-```yaml
-apiVersion: agent-install.openshift.io/v1beta1
-kind: InfraEnv
-metadata:
-  name: my-cluster
-  namespace: my-cluster
-spec:
-  pullSecretRef:
-    name: pull-secret
-  sshAuthorizedKey: "ssh-rsa AAAA..."
-  nmStateConfigLabelSelector:
-    matchLabels:
-      cluster: my-cluster
----
-apiVersion: agent-install.openshift.io/v1beta1
-kind: NMStateConfig
-metadata:
-  name: server1
-  namespace: my-cluster
-  labels:
-    cluster: my-cluster
-spec:
-  config:
-    interfaces:
-      - name: eno1
-        type: ethernet
-        state: up
-        ipv4:
-          enabled: true
-          dhcp: true
-  interfaces:
-    - name: eno1
-      macAddress: "AC:1F:6B:8A:A7:9C"
----
-apiVersion: metal3.io/v1alpha1
-kind: BareMetalHost
-metadata:
-  name: server1
-  namespace: my-cluster
-  labels:
-    infraenvs.agent-install.openshift.io: my-cluster
-spec:
-  online: true
-  bootMACAddress: ac:1f:6b:8a:a7:9c
-  bmc:
-    address: redfish-virtualmedia://pxe.example.com:8080/redfish/v1/Systems/server1
-    credentialsName: server1-bmc-secret
-    disableCertificateVerification: true
-  automatedCleaningMode: disabled
+# Auto-discover and register all interfaces
+POST /api/host/baremetal/auto-discover?host=server1
 ```
 
 ## DHCP Configuration
@@ -662,11 +392,12 @@ Log labels are automatically generated:
 3. Check activity log for IPMI errors
 4. Ensure IPMI is on accessible network
 
-### Redfish endpoints returning errors
+### ISO not booting
 
-1. Verify host has hostname and IPMI configured
-2. Check `/redfish/v1/Systems` lists the host
-3. Test IPMI directly first
+1. Verify ISO URL is accessible from the booting host
+2. Check iPXE supports the ISO format (most Linux installers work)
+3. Some ISOs require memdisk instead of sanboot
+4. Check activity log for boot attempts
 
 ## Development
 
@@ -682,19 +413,19 @@ go run main.go
 
 ### Adding New Image Types
 
+**Linux kernel/initrd:**
 1. Add kernel/initrd to `/tftpboot/`
-2. Create image via API or UI
-3. Configure boot parameters
+2. Create image via API or UI with type `linux`
+3. Configure append parameters
 
-### Extending Redfish
+**ISO images:**
+1. Host ISO on HTTP server (e.g., `http://fastregistry.gw.lo/isos/`)
+2. Add via API: `POST /api/image/iso name=myiso&url=http://...`
+3. Or add via UI: Images tab → type `iso` → enter URL
 
-Add new handlers in `main.go`:
-
-```go
-// Add to handleRedfishSystemRouter
-case subPath == "NewEndpoint":
-    handleRedfishNewEndpoint(w, r, hostname)
-```
+**Memdisk (floppy/small ISO):**
+1. Use type `memdisk` for images loaded entirely into RAM
+2. Requires memdisk binary in kernel field
 
 ## License
 

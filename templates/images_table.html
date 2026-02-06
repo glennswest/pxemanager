@@ -40,17 +40,18 @@
                         </div>
                         <div class="form-group">
                             <label>Type</label>
-                            <select name="type">
+                            <select name="type" onchange="updateImageFields(this, {{.ID}})">
                                 <option value="linux" {{if eq .Type "linux"}}selected{{end}}>linux</option>
+                                <option value="iso" {{if eq .Type "iso"}}selected{{end}}>iso</option>
                                 <option value="memdisk" {{if eq .Type "memdisk"}}selected{{end}}>memdisk</option>
                                 <option value="local" {{if eq .Type "local"}}selected{{end}}>local</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>Kernel</label>
-                            <input type="text" name="kernel" value="{{.Kernel}}">
+                        <div class="form-group" id="kernel-group-{{.ID}}">
+                            <label id="kernel-label-{{.ID}}">{{if eq .Type "iso"}}ISO URL{{else}}Kernel{{end}}</label>
+                            <input type="text" name="kernel" value="{{.Kernel}}" {{if eq .Type "iso"}}placeholder="http://server/path/to/image.iso"{{end}}>
                         </div>
-                        <div class="form-group">
+                        <div class="form-group" id="initrd-group-{{.ID}}" {{if eq .Type "iso"}}style="display:none"{{end}}>
                             <label>Initrd</label>
                             <input type="text" name="initrd" value="{{.Initrd}}">
                         </div>
@@ -85,17 +86,18 @@
             </div>
             <div class="form-group">
                 <label>Type</label>
-                <select name="type">
+                <select name="type" onchange="updateAddImageFields(this)">
                     <option value="linux">linux</option>
+                    <option value="iso">iso</option>
                     <option value="memdisk">memdisk</option>
                     <option value="local">local</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>Kernel</label>
-                <input type="text" name="kernel" placeholder="vmlinuz">
+            <div class="form-group" id="add-kernel-group">
+                <label id="add-kernel-label">Kernel</label>
+                <input type="text" name="kernel" id="add-kernel-input" placeholder="vmlinuz">
             </div>
-            <div class="form-group">
+            <div class="form-group" id="add-initrd-group">
                 <label>Initrd</label>
                 <input type="text" name="initrd" placeholder="initramfs">
             </div>
@@ -126,6 +128,28 @@ function toggleEditImage(id) {
         row.style.display = 'table-row';
         editRow.style.display = 'none';
     }
+}
+
+function updateImageFields(select, id) {
+    var isISO = select.value === 'iso';
+    var kernelLabel = document.getElementById('kernel-label-' + id);
+    var initrdGroup = document.getElementById('initrd-group-' + id);
+    var kernelInput = kernelLabel.parentElement.querySelector('input');
+
+    kernelLabel.textContent = isISO ? 'ISO URL' : 'Kernel';
+    kernelInput.placeholder = isISO ? 'http://server/path/to/image.iso' : '';
+    initrdGroup.style.display = isISO ? 'none' : '';
+}
+
+function updateAddImageFields(select) {
+    var isISO = select.value === 'iso';
+    var kernelLabel = document.getElementById('add-kernel-label');
+    var kernelInput = document.getElementById('add-kernel-input');
+    var initrdGroup = document.getElementById('add-initrd-group');
+
+    kernelLabel.textContent = isISO ? 'ISO URL' : 'Kernel';
+    kernelInput.placeholder = isISO ? 'http://server/path/to/image.iso' : 'vmlinuz';
+    initrdGroup.style.display = isISO ? 'none' : '';
 }
 </script>
 {{else}}

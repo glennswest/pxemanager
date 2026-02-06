@@ -1351,7 +1351,10 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 	script := "#!ipxe\n"
 	script += fmt.Sprintf("echo Booting %s for %s (%s)\n", imageName, host.Hostname, mac)
 
-	if img.Type == "memdisk" {
+	if img.Type == "iso" {
+		// For ISO, use sanboot with direct URL (Kernel field contains full ISO URL)
+		script += fmt.Sprintf("sanboot %s\n", img.Kernel)
+	} else if img.Type == "memdisk" {
 		// For memdisk, args go on kernel line
 		script += fmt.Sprintf("kernel %s%s", httpBase, img.Kernel)
 		if img.Append != "" {
@@ -1359,6 +1362,7 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		}
 		script += "\n"
 		script += fmt.Sprintf("initrd %s%s\n", httpBase, img.Initrd)
+		script += "boot\n"
 	} else {
 		script += fmt.Sprintf("kernel %s%s", httpBase, img.Kernel)
 		if img.Append != "" {
@@ -1368,8 +1372,8 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		if img.Initrd != "" {
 			script += fmt.Sprintf("initrd %s%s\n", httpBase, img.Initrd)
 		}
+		script += "boot\n"
 	}
-	script += "boot\n"
 
 	fmt.Fprint(w, script)
 }
@@ -1959,6 +1963,62 @@ func handleAPIHostConsoleRotate(w http.ResponseWriter, r *http.Request) {
 
 	logActivity("info", "console", host, fmt.Sprintf("Rotated console logs with label %s", name))
 	w.WriteHeader(http.StatusOK)
+}
+
+// ISO image API handler - add ISO as a bootable image
+func handleAPIImageISO(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "POST":
+		// Add a new ISO image
+		name := r.FormValue("name")
+		isoURL := r.FormValue("url")
+
+		if name == "" || isoURL == "" {
+			http.Error(w, "name and url parameters required", http.StatusBadRequest)
+			return
+		}
+
+		// Insert or update the image
+		_, err := db.Exec(`INSERT INTO images (name, kernel, type) VALUES (?, ?, 'iso')
+			ON CONFLICT(name) DO UPDATE SET kernel = ?, type = 'iso'`,
+			name, isoURL, isoURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		logActivity("info", "image", nil, fmt.Sprintf("Added ISO image %s: %s", name, isoURL))
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "ok",
+			"name":    name,
+			"iso_url": isoURL,
+			"type":    "iso",
+		})
+
+	case "GET":
+		// List all ISO images
+		rows, err := db.Query(`SELECT name, kernel FROM images WHERE type = 'iso'`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var images []map[string]string
+		for rows.Next() {
+			var name, kernel string
+			rows.Scan(&name, &kernel)
+			images = append(images, map[string]string{"name": name, "url": kernel})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(images)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // Workflow API handlers
@@ -2774,6 +2834,9 @@ func main() {
 
 	// Console routes
 	http.HandleFunc("/api/host/console/rotate", handleAPIHostConsoleRotate)
+
+	// ISO image routes
+	http.HandleFunc("/api/image/iso", handleAPIImageISO)
 
 	// Baremetalservices routes
 	http.HandleFunc("/api/host/baremetal/reset-ipmi", handleAPIBaremetalIPMIReset)
