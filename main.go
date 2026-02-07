@@ -1352,7 +1352,9 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 	script += fmt.Sprintf("echo Booting %s for %s (%s)\n", imageName, host.Hostname, mac)
 
 	if img.Type == "iso" {
-		// For ISO, use sanboot with direct URL (Kernel field contains full ISO URL)
+		// For ISO, use sanboot to boot directly from HTTP.
+		// The HTTP block device layer uses a 1 MB read-ahead cache
+		// to minimize round-trips for sequential reads.
 		script += fmt.Sprintf("sanboot %s\n", img.Kernel)
 	} else if img.Type == "memdisk" {
 		// For memdisk, args go on kernel line

@@ -50,6 +50,7 @@ scp ${BINARY_NAME}-arm64 $TARGET_HOST:$REMOTE_PATH
 echo "Deploying boot files..."
 scp undionly-custom.kpxe $TARGET_HOST:/tftpboot/undionly.kpxe
 scp boot.ipxe $TARGET_HOST:/tftpboot/boot.ipxe
+scp memdisk $TARGET_HOST:/tftpboot/memdisk
 
 # Start remote service
 echo "Starting remote service..."
