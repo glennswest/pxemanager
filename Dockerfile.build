@@ -1,4 +1,0 @@
-FROM golang:1.21-alpine
-WORKDIR /build
-COPY . .
-RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o pxemanager-linux .

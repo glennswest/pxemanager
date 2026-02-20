@@ -1,0 +1,23 @@
+# PXE Manager for g10 rack
+# Deploy via: oc --server=http://api.rose1.gt.lo:8082 apply -f pxe.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pxe
+  namespace: g10
+  annotations:
+    vkube.io/network: g10
+    vkube.io/boot-priority: "70"
+    vkube.io/depends-on: "g10_dns_microdns"
+    vkube.io/static-ip: "192.168.10.200"
+    vkube.io/image-policy: auto
+    vkube.io/aliases: "pxe"
+spec:
+  restartPolicy: Always
+  containers:
+    - name: pxe
+      image: 192.168.200.2:5000/pxemanager:edge
+      volumeMounts:
+        - name: data
+          mountPath: /var/lib/pxemanager

@@ -1,10 +1,14 @@
 #!/bin/bash
+# Build, push, and deploy pxemanager to mkube on rose1
 set -e
 
-TARGET_HOST="root@pxe.g10.lo"
-BINARY_NAME="pxemanager"
-REMOTE_PATH="/usr/local/bin/pxemanager"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REGISTRY="192.168.200.2:5000"
+IMAGE="$REGISTRY/pxemanager:edge"
+MKUBE_SERVER="http://api.rose1.gt.lo:8082"
 LAST_DEPLOY_FILE=".last-deploy"
+
+cd "$SCRIPT_DIR"
 
 # Get current version and git info
 VERSION=$(cat VERSION 2>/dev/null | tr -d '\n' || echo "0.0.0")
@@ -33,35 +37,18 @@ fi
 FULL_VERSION="${VERSION}+${GIT_HASH}"
 echo "Building version: $FULL_VERSION"
 
-# Build for ARM64 (MikroTik)
-echo "Building for ARM64..."
-GOOS=linux GOARCH=arm64 go build -ldflags "-X main.Version=$FULL_VERSION" -o ${BINARY_NAME}-arm64 .
+echo "Building container image..."
+podman build --build-arg VERSION="$FULL_VERSION" -t "$IMAGE" .
 
-# Stop remote service
-echo "Stopping remote service..."
-ssh $TARGET_HOST "pkill pxemanager 2>/dev/null || true"
-sleep 1
+echo "Pushing to $REGISTRY..."
+podman push --tls-verify=false "$IMAGE"
 
-# Deploy
-echo "Deploying to $TARGET_HOST..."
-scp ${BINARY_NAME}-arm64 $TARGET_HOST:$REMOTE_PATH
-
-# Deploy boot files
-echo "Deploying boot files..."
-scp undionly-custom.kpxe $TARGET_HOST:/tftpboot/undionly.kpxe
-scp boot.ipxe $TARGET_HOST:/tftpboot/boot.ipxe
-scp memdisk $TARGET_HOST:/tftpboot/memdisk
-
-# Start remote service
-echo "Starting remote service..."
-ssh $TARGET_HOST "chmod +x $REMOTE_PATH && nohup $REMOTE_PATH > /var/log/pxemanager.log 2>&1 &"
-sleep 2
-
-# Verify
-echo "Verifying..."
-ssh $TARGET_HOST "pgrep -a pxemanager"
+echo "Deploying to mkube..."
+oc --server="$MKUBE_SERVER" apply -f pxe.yaml
 
 # Save deployed hash for next comparison
 echo "$GIT_HASH" > $LAST_DEPLOY_FILE
 
-echo "Deployed $FULL_VERSION to $TARGET_HOST"
+echo ""
+echo "=== Done ==="
+echo "Deployed pxemanager $FULL_VERSION to 192.168.10.200"
