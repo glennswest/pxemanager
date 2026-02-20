@@ -44,6 +44,8 @@ echo "Pushing to $REGISTRY..."
 podman push --tls-verify=false "$IMAGE"
 
 echo "Deploying to mkube..."
+oc --server="$MKUBE_SERVER" delete -f pxe.yaml 2>/dev/null || true
+sleep 5
 oc --server="$MKUBE_SERVER" apply -f pxe.yaml
 
 # Save deployed hash for next comparison

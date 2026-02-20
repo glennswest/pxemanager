@@ -10,7 +10,6 @@ metadata:
     vkube.io/network: g10
     vkube.io/boot-priority: "70"
     vkube.io/depends-on: "g10_dns_microdns"
-    vkube.io/static-ip: "192.168.10.200"
     vkube.io/image-policy: auto
     vkube.io/aliases: "pxe"
 spec:
