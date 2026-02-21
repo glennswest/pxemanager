@@ -1,0 +1,68 @@
+# g10 network (192.168.10.0/24) - Server NICs (dual-port)
+# bridge, DHCP server: dhcp10, pool: 192.168.10.10-210
+# Captured 2026-02-20 from RouterOS DHCP lease table
+#
+# Each server has two NICs:
+#   serverN.g10.lo  (nic a) at .10+N
+#   serverNb.g10.lo (nic b) at .20+N
+#
+# DNS: 192.168.10.252 (microdns, to be migrated from .199)
+# Gateway: 192.168.10.1
+# PXE: next-server 192.168.10.9 (pxemanager), boot-file undionly.kpxe
+
+leases:
+  - ip: "192.168.10.10"
+    hostname: "server1.g10.lo"
+    mac: "AC:1F:6B:8A:A7:9C"
+
+  - ip: "192.168.10.20"
+    hostname: "server1b.g10.lo"
+    mac: "F4:52:14:84:B7:E0"
+
+  - ip: "192.168.10.11"
+    hostname: "server2.g10.lo"
+    mac: "AC:1F:6B:8B:11:5D"
+
+  - ip: "192.168.10.21"
+    hostname: "server2b.g10.lo"
+    mac: "F4:52:14:84:BC:C0"
+
+  - ip: "192.168.10.12"
+    hostname: "server3.g10.lo"
+    mac: "AC:1F:6B:8A:A4:5C"
+
+  - ip: "192.168.10.22"
+    hostname: "server3b.g10.lo"
+    mac: "F4:52:14:84:86:F0"
+
+  - ip: "192.168.10.13"
+    hostname: "server4.g10.lo"
+    mac: "AC:1F:6B:8A:9B:E2"
+
+  - ip: "192.168.10.23"
+    hostname: "server4b.g10.lo"
+    mac: "F4:52:14:84:5F:A0"
+
+  - ip: "192.168.10.14"
+    hostname: "server5.g10.lo"
+    mac: "AC:1F:6B:8A:A3:1A"
+
+  - ip: "192.168.10.24"
+    hostname: "server5b.g10.lo"
+    mac: "F4:52:14:84:6F:F0"
+
+  - ip: "192.168.10.15"
+    hostname: "server6.g10.lo"
+    mac: "AC:1F:6B:8D:90:13"
+
+  - ip: "192.168.10.25"
+    hostname: "server6b.g10.lo"
+    mac: "F4:52:14:84:B7:D0"
+
+  - ip: "192.168.10.17"
+    hostname: "server8.g10.lo"
+    mac: "AC:1F:6B:8A:A3:96"
+
+  - ip: "192.168.10.27"
+    hostname: "server8b.g10.lo"
+    mac: "F4:52:14:84:AE:30"
