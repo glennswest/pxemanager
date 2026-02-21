@@ -42,7 +42,7 @@
                     <button class="success" hx-post="/api/host/ipmi?host={{.Hostname}}&action=power_on" hx-swap="none"{{if not $canIPMI}} disabled{{end}}>On</button>
                     <button class="danger" hx-post="/api/host/ipmi?host={{.Hostname}}&action=power_off" hx-swap="none"{{if not $canIPMI}} disabled{{end}}>Off</button>
                     <button class="secondary" hx-post="/api/host/ipmi?host={{.Hostname}}&action=restart" hx-swap="none"{{if not $canIPMI}} disabled{{end}}>Restart</button>
-                    <a href="http://console.g11.lo/#{{if .Hostname}}{{.Hostname}}{{else}}{{.MAC}}{{end}}" target="_blank" class="btn secondary">Console</a>
+                    <a href="http://ipmiserial.g11.lo/#{{if .Hostname}}{{.Hostname}}{{else}}{{.MAC}}{{end}}" target="_blank" class="btn secondary">Console</a>
                 </div>
             </td>
         </tr>

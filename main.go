@@ -22,7 +22,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const ConsoleServerURL = "http://console.g11.lo"
+const ConsoleServerURL = "http://ipmiserial.g11.lo"
 const NetworkManagerURL = "http://network.gw.lo"
 
 // Version is set at build time via -ldflags
