@@ -26,6 +26,7 @@ import (
 
 const ConsoleServerURL = "http://ipmiserial.g11.lo"
 const NetworkManagerURL = "http://network.gw.lo"
+const DefaultMkubeURL = "http://192.168.200.2:8082"
 
 // Version is set at build time via -ldflags
 var Version = "dev"
@@ -3138,10 +3139,12 @@ func main() {
 	// Start workflow processor
 	go workflowProcessor()
 
-	// Start BMH watcher if MKUBE_URL is set
-	if mkubeURL := os.Getenv("MKUBE_URL"); mkubeURL != "" {
-		go bmhWatcher(context.Background(), mkubeURL)
+	// Start BMH watcher
+	mkubeURL := os.Getenv("MKUBE_URL")
+	if mkubeURL == "" {
+		mkubeURL = DefaultMkubeURL
 	}
+	go bmhWatcher(context.Background(), mkubeURL)
 
 	// Routes
 	http.HandleFunc("/", handleIndex)
