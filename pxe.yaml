@@ -17,7 +17,7 @@ spec:
   restartPolicy: Always
   containers:
     - name: pxe
-      image: 192.168.200.2:5000/pxemanager:v0.6.34
+      image: 192.168.200.2:5000/pxemanager:v0.6.37
       env:
         - name: MKUBE_URL
           value: "http://192.168.200.2:8082"
