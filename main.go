@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -2790,6 +2792,293 @@ func handleRedfishPower(w http.ResponseWriter, r *http.Request, hostname string)
 	})
 }
 
+// ─── BMH Sync Types ─────────────────────────────────────────────────────────
+
+type bmhMetadata struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+}
+
+type bmhBMC struct {
+	Address  string `json:"address"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type bmhSpec struct {
+	BMC            bmhBMC `json:"bmc"`
+	BootMACAddress string `json:"bootMACAddress"`
+	Online         *bool  `json:"online,omitempty"`
+	Image          string `json:"image,omitempty"`
+}
+
+type bmhStatus struct {
+	Phase     string `json:"phase"`
+	PoweredOn bool   `json:"poweredOn"`
+	IP        string `json:"ip,omitempty"`
+}
+
+type bmhObject struct {
+	Metadata bmhMetadata `json:"metadata"`
+	Spec     bmhSpec     `json:"spec"`
+	Status   bmhStatus   `json:"status,omitempty"`
+}
+
+type bmhList struct {
+	Items []bmhObject `json:"items"`
+}
+
+type bmhWatchEvent struct {
+	Type   string    `json:"type"`
+	Object bmhObject `json:"object"`
+}
+
+const bmhCachePath = "/var/lib/pxemanager/bmh-cache.json"
+
+func loadBMHCache() []bmhObject {
+	data, err := os.ReadFile(bmhCachePath)
+	if err != nil {
+		return nil
+	}
+	var items []bmhObject
+	if err := json.Unmarshal(data, &items); err != nil {
+		log.Printf("BMH cache: failed to parse: %v", err)
+		return nil
+	}
+	return items
+}
+
+func saveBMHCache(items []bmhObject) {
+	data, err := json.Marshal(items)
+	if err != nil {
+		log.Printf("BMH cache: failed to marshal: %v", err)
+		return
+	}
+	dir := filepath.Dir(bmhCachePath)
+	tmp := filepath.Join(dir, ".bmh-cache.tmp")
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		log.Printf("BMH cache: failed to write temp: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, bmhCachePath); err != nil {
+		log.Printf("BMH cache: failed to rename: %v", err)
+	}
+}
+
+func syncBMHToHosts(bmhs []bmhObject) {
+	for _, bmh := range bmhs {
+		mac := normalizeMAC(bmh.Spec.BootMACAddress)
+		if mac == "" {
+			continue
+		}
+
+		hostname := bmh.Metadata.Name
+		image := bmh.Spec.Image
+		if image == "" {
+			image = "localboot"
+		}
+
+		existing, err := getHostByMAC(mac)
+		if err != nil {
+			// Host doesn't exist, create it
+			_, err := db.Exec(`INSERT INTO hosts (mac, hostname, current_image, ipmi_ip, ipmi_username, ipmi_password) VALUES (?, ?, ?, ?, ?, ?)`,
+				mac, hostname, image,
+				nullStr(bmh.Spec.BMC.Address),
+				defaultStr(bmh.Spec.BMC.Username, "ADMIN"),
+				defaultStr(bmh.Spec.BMC.Password, "ADMIN"))
+			if err != nil {
+				log.Printf("BMH sync: failed to insert host %s: %v", hostname, err)
+				continue
+			}
+			log.Printf("BMH sync: created host %s (mac=%s)", hostname, mac)
+
+			// Create primary interface
+			host, err := getHostByMAC(mac)
+			if err == nil {
+				db.Exec(`INSERT OR IGNORE INTO host_interfaces (host_id, mac, name, hostname) VALUES (?, ?, 'a', ?)`,
+					host.ID, mac, hostname)
+			}
+
+			logActivity("info", "bmh-sync", &Host{MAC: mac, Hostname: hostname}, fmt.Sprintf("Host created from BMH %s/%s", bmh.Metadata.Namespace, bmh.Metadata.Name))
+			continue
+		}
+
+		// Host exists, check for changes
+		changed := false
+		updates := []string{}
+		args := []interface{}{}
+
+		if existing.Hostname != hostname {
+			updates = append(updates, "hostname = ?")
+			args = append(args, hostname)
+			changed = true
+		}
+		if existing.CurrentImage != image {
+			updates = append(updates, "current_image = ?")
+			args = append(args, image)
+			changed = true
+		}
+		if bmh.Spec.BMC.Address != "" && (existing.IPMIIP == nil || *existing.IPMIIP != bmh.Spec.BMC.Address) {
+			updates = append(updates, "ipmi_ip = ?")
+			args = append(args, bmh.Spec.BMC.Address)
+			changed = true
+		}
+		bmcUser := defaultStr(bmh.Spec.BMC.Username, "ADMIN")
+		if bmcUser != existing.IPMIUsername {
+			updates = append(updates, "ipmi_username = ?")
+			args = append(args, bmcUser)
+			changed = true
+		}
+		bmcPass := defaultStr(bmh.Spec.BMC.Password, "ADMIN")
+		if bmcPass != existing.IPMIPassword {
+			updates = append(updates, "ipmi_password = ?")
+			args = append(args, bmcPass)
+			changed = true
+		}
+
+		if changed {
+			args = append(args, mac)
+			query := fmt.Sprintf("UPDATE hosts SET %s WHERE mac = ?", strings.Join(updates, ", "))
+			if _, err := db.Exec(query, args...); err != nil {
+				log.Printf("BMH sync: failed to update host %s: %v", hostname, err)
+				continue
+			}
+			log.Printf("BMH sync: updated host %s (mac=%s)", hostname, mac)
+			logActivity("info", "bmh-sync", existing, fmt.Sprintf("Host updated from BMH: %s", strings.Join(updates, ", ")))
+		}
+	}
+}
+
+func nullStr(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func defaultStr(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func bmhWatcher(ctx context.Context, mkubeURL string) {
+	log.Printf("BMH watcher: starting (mkube=%s)", mkubeURL)
+
+	// Step 1: Load cached data for fast startup
+	cached := loadBMHCache()
+	if len(cached) > 0 {
+		log.Printf("BMH watcher: loaded %d hosts from cache", len(cached))
+		syncBMHToHosts(cached)
+	}
+
+	// Step 2: Fetch current data from mkube
+	fetchAndSync := func() {
+		items := fetchBMHList(mkubeURL)
+		if items != nil {
+			syncBMHToHosts(items)
+			saveBMHCache(items)
+			log.Printf("BMH watcher: synced %d hosts from mkube", len(items))
+		}
+	}
+	fetchAndSync()
+
+	// Step 3: Periodic full sync in background
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fetchAndSync()
+			}
+		}
+	}()
+
+	// Step 4: Watch with reconnect loop
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		watchBMHStream(ctx, mkubeURL)
+
+		// Watch disconnected, wait before reconnecting
+		log.Printf("BMH watcher: watch disconnected, will reconnect in 5s")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+			fetchAndSync()
+		}
+	}
+}
+
+func fetchBMHList(mkubeURL string) []bmhObject {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(mkubeURL + "/api/v1/baremetalhosts")
+	if err != nil {
+		log.Printf("BMH watcher: fetch failed: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var list bmhList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		log.Printf("BMH watcher: decode failed: %v", err)
+		return nil
+	}
+	return list.Items
+}
+
+func watchBMHStream(ctx context.Context, mkubeURL string) {
+	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/baremetalhosts?watch=true", nil)
+	if err != nil {
+		log.Printf("BMH watcher: watch request failed: %v", err)
+		return
+	}
+
+	watchClient := &http.Client{}
+	resp, err := watchClient.Do(req)
+	if err != nil {
+		log.Printf("BMH watcher: watch connect failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	log.Printf("BMH watcher: watch connected")
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var event bmhWatchEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			log.Printf("BMH watcher: decode event failed: %v", err)
+			continue
+		}
+
+		switch event.Type {
+		case "ADDED", "MODIFIED":
+			syncBMHToHosts([]bmhObject{event.Object})
+		case "DELETED":
+			mac := normalizeMAC(event.Object.Spec.BootMACAddress)
+			if mac != "" {
+				log.Printf("BMH watcher: host deleted: %s (mac=%s)", event.Object.Metadata.Name, mac)
+				logActivity("info", "bmh-sync", nil, fmt.Sprintf("BMH deleted: %s (mac=%s)", event.Object.Metadata.Name, mac))
+			}
+		}
+	}
+}
+
 func main() {
 	// Initialize database
 	if err := initDB(); err != nil {
@@ -2806,6 +3095,11 @@ func main() {
 
 	// Start workflow processor
 	go workflowProcessor()
+
+	// Start BMH watcher if MKUBE_URL is set
+	if mkubeURL := os.Getenv("MKUBE_URL"); mkubeURL != "" {
+		go bmhWatcher(context.Background(), mkubeURL)
+	}
 
 	// Routes
 	http.HandleFunc("/", handleIndex)
