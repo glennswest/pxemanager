@@ -35,6 +35,16 @@ TAG="v${VERSION}"
 IMAGE_EDGE="$REGISTRY/$REPO:edge"
 IMAGE_TAG="$REGISTRY/$REPO:$TAG"
 
+# Copy kernel/initrd from baremetalservices for baking into image
+BMS_BOOT="../baremetalservices/pxeimage/boot"
+if [ -f "$BMS_BOOT/vmlinuz" ] && [ -f "$BMS_BOOT/initramfs" ]; then
+    cp "$BMS_BOOT/vmlinuz" vmlinuz
+    cp "$BMS_BOOT/initramfs" initramfs
+    echo "Copied vmlinuz + initramfs from baremetalservices"
+else
+    echo "WARNING: baremetalservices boot files not found at $BMS_BOOT"
+fi
+
 echo "Building $REPO $FULL_VERSION ..."
 
 podman build --build-arg VERSION="$FULL_VERSION" -t "$IMAGE_EDGE" -t "$IMAGE_TAG" .

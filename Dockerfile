@@ -15,6 +15,8 @@ COPY --from=builder /build/pxemanager /usr/local/bin/pxemanager
 COPY undionly-custom.kpxe /opt/pxemanager/defaults/undionly.kpxe
 COPY boot.ipxe /opt/pxemanager/defaults/boot.ipxe
 COPY memdisk /opt/pxemanager/defaults/memdisk
+COPY vmlinuz /opt/pxemanager/defaults/vmlinuz
+COPY initramfs /opt/pxemanager/defaults/initramfs
 
 EXPOSE 69/udp
 EXPOSE 8080/tcp

@@ -3,3 +3,5 @@ pxemanager-arm64
 pxemanager-linux
 pxemanager.db
 .last-deploy
+vmlinuz
+initramfs
