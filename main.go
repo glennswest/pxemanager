@@ -2792,6 +2792,45 @@ func handleRedfishPower(w http.ResponseWriter, r *http.Request, hostname string)
 	})
 }
 
+// ─── Boot File Initialization ───────────────────────────────────────────────
+
+const defaultsDir = "/opt/pxemanager/defaults"
+const tftpbootDir = "/tftpboot"
+
+// ensureBootFiles copies default PXE boot files from the image defaults
+// directory to /tftpboot if they are missing. This handles the case where
+// the tftpboot volume is empty (first deploy, volume loss, etc).
+func ensureBootFiles() {
+	os.MkdirAll(tftpbootDir, 0755)
+
+	entries, err := os.ReadDir(defaultsDir)
+	if err != nil {
+		log.Printf("Boot files: defaults dir not available: %v", err)
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		dst := filepath.Join(tftpbootDir, entry.Name())
+		if _, err := os.Stat(dst); err == nil {
+			continue // already exists
+		}
+		src := filepath.Join(defaultsDir, entry.Name())
+		data, err := os.ReadFile(src)
+		if err != nil {
+			log.Printf("Boot files: failed to read %s: %v", src, err)
+			continue
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			log.Printf("Boot files: failed to write %s: %v", dst, err)
+			continue
+		}
+		log.Printf("Boot files: restored %s from defaults", entry.Name())
+	}
+}
+
 // ─── BMH Sync Types ─────────────────────────────────────────────────────────
 
 type bmhMetadata struct {
@@ -3092,6 +3131,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to parse templates: %v", err)
 	}
+
+	// Ensure PXE boot files exist in /tftpboot
+	ensureBootFiles()
 
 	// Start workflow processor
 	go workflowProcessor()

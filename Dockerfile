@@ -9,9 +9,12 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.Version=${VERSION}" -o pxeman
 FROM alpine:latest
 RUN apk add --no-cache tftp-hpa
 COPY --from=builder /build/pxemanager /usr/local/bin/pxemanager
-COPY undionly-custom.kpxe /tftpboot/undionly.kpxe
-COPY boot.ipxe /tftpboot/boot.ipxe
-COPY memdisk /tftpboot/memdisk
+
+# Store boot file defaults in a non-volume path so they survive volume mounts.
+# The application copies missing files from here to /tftpboot on startup.
+COPY undionly-custom.kpxe /opt/pxemanager/defaults/undionly.kpxe
+COPY boot.ipxe /opt/pxemanager/defaults/boot.ipxe
+COPY memdisk /opt/pxemanager/defaults/memdisk
 
 EXPOSE 69/udp
 EXPOSE 8080/tcp
