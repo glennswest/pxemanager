@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0] - 2026-02-23
+
+### Fixed
+- Power on/restart now boots from local disk when image is `localboot` (was always forcing PXE)
+- Filtered out duplicate `serverXb` devices from g10 namespace
+
+### Changed
+- BMH discovery scoped to `g10` namespace (no longer fetches all namespaces)
+- Default HTTP port changed from 8080 to 80
+- iPXE chain URLs updated to use port 80
+- Switched to local cross-compile + alpine container build (removed golang builder stage)
+- Simplified build.sh and deploy.sh to use `:edge` tag with registry poll
+- Pod manifest uses `:edge` image tag for auto-updates via mkube
+
 ## [0.5.0] - 2026-01-30
 
 ### Changed

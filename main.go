@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -30,6 +31,12 @@ const DefaultMkubeURL = "http://192.168.200.2:8082"
 
 // Version is set at build time via -ldflags
 var Version = "dev"
+
+// bmhMap tracks hostname → BMH metadata for PATCH updates to mkube
+var bmhMap sync.Map // map[string]bmhObject
+
+// activeMkubeURL is the mkube API URL used for BMH operations
+var activeMkubeURL string
 
 //go:embed templates/*
 var templatesFS embed.FS
@@ -548,6 +555,60 @@ func getActivityLogs(limit int) ([]ActivityLog, error) {
 	return logs, nil
 }
 
+// clearDellSessions clears stale Redfish/IPMI sessions on Dell iDRAC.
+// Non-Dell BMCs will simply not respond on the Redfish endpoint and we skip silently.
+func clearDellSessions(host *Host) {
+	if host.IPMIIP == nil || *host.IPMIIP == "" {
+		return
+	}
+	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	client := &http.Client{Transport: tr, Timeout: 5 * time.Second}
+
+	sessURL := fmt.Sprintf("https://%s/redfish/v1/SessionService/Sessions", *host.IPMIIP)
+	req, err := http.NewRequest("GET", sessURL, nil)
+	if err != nil {
+		return
+	}
+	req.SetBasicAuth(host.IPMIUsername, host.IPMIPassword)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return // Not Dell or Redfish not available
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return
+	}
+
+	var result struct {
+		Members []struct {
+			ID string `json:"@odata.id"`
+		} `json:"Members"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return
+	}
+
+	cleared := 0
+	for _, m := range result.Members {
+		delURL := fmt.Sprintf("https://%s%s", *host.IPMIIP, m.ID)
+		delReq, err := http.NewRequest("DELETE", delURL, nil)
+		if err != nil {
+			continue
+		}
+		delReq.SetBasicAuth(host.IPMIUsername, host.IPMIPassword)
+		delResp, err := client.Do(delReq)
+		if err == nil {
+			delResp.Body.Close()
+			cleared++
+		}
+	}
+	if cleared > 0 {
+		log.Printf("Dell iDRAC: cleared %d stale sessions on %s", cleared, *host.IPMIIP)
+	}
+}
+
 // IPMI functions using pure Go library (no external ipmitool needed)
 func getIPMIClient(host *Host) (*ipmi.Client, error) {
 	if host.IPMIIP == nil || *host.IPMIIP == "" {
@@ -594,12 +655,22 @@ func ipmiPowerOn(host *Host) error {
 	}
 	defer client.Close(context.Background())
 
-	// Set boot device to PXE for next boot
-	client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+	// Set boot device based on effective image
+	imageName := host.CurrentImage
+	if host.NextImage != nil && *host.NextImage != "" {
+		imageName = *host.NextImage
+	}
+	bootMsg := "PXE boot"
+	if imageName == "localboot" {
+		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, false)
+		bootMsg = "local boot"
+	} else {
+		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+	}
 
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerUp)
 	if err == nil {
-		logActivity("info", "ipmi", host, "Power on command sent (PXE boot)")
+		logActivity("info", "ipmi", host, fmt.Sprintf("Power on command sent (%s)", bootMsg))
 		if host.Hostname != "" {
 			imageName := host.CurrentImage
 			if host.NextImage != nil && *host.NextImage != "" {
@@ -645,12 +716,22 @@ func ipmiRestart(host *Host) error {
 	}
 	defer client.Close(context.Background())
 
-	// Set boot device to PXE for next boot
-	client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+	// Set boot device based on effective image
+	imageName := host.CurrentImage
+	if host.NextImage != nil && *host.NextImage != "" {
+		imageName = *host.NextImage
+	}
+	bootMsg := "PXE boot"
+	if imageName == "localboot" {
+		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, false)
+		bootMsg = "local boot"
+	} else {
+		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+	}
 
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerCycle)
 	if err == nil {
-		logActivity("info", "ipmi", host, "Power cycle command sent (PXE boot)")
+		logActivity("info", "ipmi", host, fmt.Sprintf("Power cycle command sent (%s)", bootMsg))
 		if host.Hostname != "" {
 			imageName := host.CurrentImage
 			if host.NextImage != nil && *host.NextImage != "" {
@@ -1187,7 +1268,7 @@ func handleBootIPXE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprint(w, `#!ipxe
 dhcp
-chain http://192.168.10.200:8080/ipxe?mac=${net0/mac} || shell
+chain http://192.168.10.200/ipxe?mac=${net0/mac} || shell
 `)
 }
 
@@ -1349,7 +1430,7 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpBase := "http://192.168.10.200:8080/files/"
+	httpBase := "http://192.168.10.200/files/"
 
 	script := "#!ipxe\n"
 	script += fmt.Sprintf("echo Booting %s for %s (%s)\n", imageName, host.Hostname, mac)
@@ -1633,22 +1714,28 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clear stale sessions on Dell iDRAC before operations
+	clearDellSessions(host)
+
 	switch action {
 	case "restart":
 		if err := ipmiRestart(host); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		go updateBMHPowerStatus(host.Hostname, true)
 	case "power_on":
 		if err := ipmiPowerOn(host); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		go updateBMHPowerStatus(host.Hostname, true)
 	case "power_off":
 		if err := ipmiPowerOff(host); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		go updateBMHPowerStatus(host.Hostname, false)
 	case "set_boot":
 		device := r.URL.Query().Get("device")
 		switch device {
@@ -1670,6 +1757,9 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
 	}
+
+	// Clear sessions after operation to avoid accumulation
+	go clearDellSessions(host)
 
 	// Return activity table as out-of-band swap for immediate update
 	w.Header().Set("Content-Type", "text/html")
@@ -2470,30 +2560,51 @@ func handleRedfishSystemAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Clear stale sessions before operation
+	clearDellSessions(host)
+
 	var actionErr error
 	switch body.ResetType {
 	case "On":
 		actionErr = ipmiPowerOn(host)
 		logActivity("info", "redfish", host, "Power on via Redfish API")
+		if actionErr == nil {
+			go updateBMHPowerStatus(host.Hostname, true)
+		}
 	case "ForceOff", "GracefulShutdown":
 		actionErr = ipmiPowerOff(host)
 		logActivity("info", "redfish", host, "Power off via Redfish API")
+		if actionErr == nil {
+			go updateBMHPowerStatus(host.Hostname, false)
+		}
 	case "ForceRestart", "GracefulRestart":
 		actionErr = ipmiRestart(host)
 		logActivity("info", "redfish", host, "Restart via Redfish API")
+		if actionErr == nil {
+			go updateBMHPowerStatus(host.Hostname, true)
+		}
 	case "PushPowerButton":
 		// Toggle power
 		status, _ := ipmiPowerStatus(host)
 		if status == "on" {
 			actionErr = ipmiPowerOff(host)
+			if actionErr == nil {
+				go updateBMHPowerStatus(host.Hostname, false)
+			}
 		} else {
 			actionErr = ipmiPowerOn(host)
+			if actionErr == nil {
+				go updateBMHPowerStatus(host.Hostname, true)
+			}
 		}
 		logActivity("info", "redfish", host, "Power button via Redfish API")
 	default:
 		http.Error(w, fmt.Sprintf("Unsupported ResetType: %s", body.ResetType), http.StatusBadRequest)
 		return
 	}
+
+	// Clear sessions after operation
+	go clearDellSessions(host)
 
 	if actionErr != nil {
 		http.Error(w, actionErr.Error(), http.StatusInternalServerError)
@@ -2913,6 +3024,11 @@ func syncBMHToHosts(bmhs []bmhObject) {
 		}
 
 		hostname := bmh.Metadata.Name
+		// Skip "b" variant devices (e.g. server1b, server30b)
+		if strings.HasSuffix(hostname, "b") {
+			continue
+		}
+		bmhMap.Store(hostname, bmh)
 		image := bmh.Spec.Image
 		if image == "" {
 			image = "localboot"
@@ -2987,6 +3103,86 @@ func syncBMHToHosts(bmhs []bmhObject) {
 			logActivity("info", "bmh-sync", existing, fmt.Sprintf("Host updated from BMH: %s", strings.Join(updates, ", ")))
 		}
 	}
+
+	// Remove hosts that no longer have a BMH (only if we got a real list, not empty/failed)
+	if len(bmhs) < 2 {
+		return // Don't cleanup on empty or near-empty lists — likely a fetch failure
+	}
+
+	bmhMACs := make(map[string]bool)
+	for _, bmh := range bmhs {
+		mac := normalizeMAC(bmh.Spec.BootMACAddress)
+		if mac != "" {
+			bmhMACs[mac] = true
+		}
+	}
+
+	rows, err := db.Query(`SELECT id, mac, hostname FROM hosts`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var toDelete []struct {
+		id       int
+		mac      string
+		hostname string
+	}
+	for rows.Next() {
+		var id int
+		var mac, hostname string
+		if err := rows.Scan(&id, &mac, &hostname); err != nil {
+			continue
+		}
+		if !bmhMACs[normalizeMAC(mac)] {
+			toDelete = append(toDelete, struct {
+				id       int
+				mac      string
+				hostname string
+			}{id, mac, hostname})
+		}
+	}
+
+	for _, h := range toDelete {
+		db.Exec(`DELETE FROM host_interfaces WHERE host_id = ?`, h.id)
+		db.Exec(`DELETE FROM hosts WHERE id = ?`, h.id)
+		bmhMap.Delete(h.hostname)
+		log.Printf("BMH sync: removed host %s (mac=%s) — no longer in BMH", h.hostname, h.mac)
+		logActivity("info", "bmh-sync", &Host{MAC: h.mac, Hostname: h.hostname}, "Host removed — BMH deleted")
+	}
+}
+
+// updateBMHPowerStatus patches the BMH poweredOn status in mkube
+func updateBMHPowerStatus(hostname string, poweredOn bool) {
+	if activeMkubeURL == "" {
+		return
+	}
+	val, ok := bmhMap.Load(hostname)
+	if !ok {
+		return
+	}
+	bmh := val.(bmhObject)
+	ns := bmh.Metadata.Namespace
+	if ns == "" {
+		return
+	}
+
+	patch := fmt.Sprintf(`{"status":{"poweredOn":%t}}`, poweredOn)
+	url := fmt.Sprintf("%s/api/v1/namespaces/%s/baremetalhosts/%s", activeMkubeURL, ns, hostname)
+	req, err := http.NewRequest("PATCH", url, strings.NewReader(patch))
+	if err != nil {
+		log.Printf("BMH status: failed to create PATCH request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("BMH status: failed to PATCH %s: %v", hostname, err)
+		return
+	}
+	resp.Body.Close()
+	log.Printf("BMH status: updated %s/%s poweredOn=%t", ns, hostname, poweredOn)
 }
 
 func nullStr(s string) interface{} {
@@ -3061,7 +3257,7 @@ func bmhWatcher(ctx context.Context, mkubeURL string) {
 
 func fetchBMHList(mkubeURL string) []bmhObject {
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(mkubeURL + "/api/v1/baremetalhosts")
+	resp, err := client.Get(mkubeURL + "/api/v1/namespaces/g10/baremetalhosts")
 	if err != nil {
 		log.Printf("BMH watcher: fetch failed: %v", err)
 		return nil
@@ -3077,7 +3273,7 @@ func fetchBMHList(mkubeURL string) []bmhObject {
 }
 
 func watchBMHStream(ctx context.Context, mkubeURL string) {
-	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/baremetalhosts?watch=true", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/namespaces/g10/baremetalhosts?watch=true", nil)
 	if err != nil {
 		log.Printf("BMH watcher: watch request failed: %v", err)
 		return
@@ -3144,6 +3340,7 @@ func main() {
 	if mkubeURL == "" {
 		mkubeURL = DefaultMkubeURL
 	}
+	activeMkubeURL = mkubeURL
 	go bmhWatcher(context.Background(), mkubeURL)
 
 	// Routes
@@ -3214,7 +3411,7 @@ func main() {
 
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "80"
 	}
 
 	log.Printf("PXE Manager starting on :%s", port)

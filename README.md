@@ -116,13 +116,13 @@ The application uses environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8080` | HTTP server port |
+| `PORT` | `80` | HTTP server port |
 
 Database is stored in `pxemanager.db` (SQLite).
 
 ## Web UI
 
-Access the web interface at `http://<host>:8080/`
+Access the web interface at `http://<host>/`
 
 ### Tabs
 

@@ -3,9 +3,10 @@
 BINARY = pxemanager
 
 build:
-	go build -o $(BINARY) .
+	./build.sh
 
-run: build
+run:
+	go build -o $(BINARY) .
 	./$(BINARY)
 
 deploy:
