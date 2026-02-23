@@ -3257,7 +3257,7 @@ func bmhWatcher(ctx context.Context, mkubeURL string) {
 
 func fetchBMHList(mkubeURL string) []bmhObject {
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(mkubeURL + "/api/v1/namespaces/g10/baremetalhosts")
+	resp, err := client.Get(mkubeURL + "/api/v1/namespaces/g11/baremetalhosts")
 	if err != nil {
 		log.Printf("BMH watcher: fetch failed: %v", err)
 		return nil
@@ -3273,7 +3273,7 @@ func fetchBMHList(mkubeURL string) []bmhObject {
 }
 
 func watchBMHStream(ctx context.Context, mkubeURL string) {
-	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/namespaces/g10/baremetalhosts?watch=true", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/namespaces/g11/baremetalhosts?watch=true", nil)
 	if err != nil {
 		log.Printf("BMH watcher: watch request failed: %v", err)
 		return
