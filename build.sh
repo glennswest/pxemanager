@@ -3,7 +3,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REGISTRY="192.168.200.2:5000"
+REGISTRY="registry.gt.lo:5000"
 REPO="pxemanager"
 
 cd "$SCRIPT_DIR"
