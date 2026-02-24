@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.1] - 2026-02-23
+
+### Fixed
+- BMH sync no longer overwrites `current_image` on existing hosts — user selections now persist across sync cycles
+- IPMI power on/off/restart no longer blocks waiting for ipmiserial console log rotation (moved to background goroutine)
+
 ## [0.7.0] - 2026-02-23
 
 ### Fixed

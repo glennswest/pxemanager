@@ -672,16 +672,18 @@ func ipmiPowerOn(host *Host) error {
 	if err == nil {
 		logActivity("info", "ipmi", host, fmt.Sprintf("Power on command sent (%s)", bootMsg))
 		if host.Hostname != "" {
-			imageName := host.CurrentImage
-			if host.NextImage != nil && *host.NextImage != "" {
-				imageName = *host.NextImage
-			}
-			label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
-			if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-				logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
-			} else {
-				logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-			}
+			go func() {
+				imgName := host.CurrentImage
+				if host.NextImage != nil && *host.NextImage != "" {
+					imgName = *host.NextImage
+				}
+				label := fmt.Sprintf("%s-%s", imgName, time.Now().Format("20060102-150405"))
+				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+					logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
+				} else {
+					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+				}
+			}()
 		}
 	}
 	return err
@@ -698,12 +700,14 @@ func ipmiPowerOff(host *Host) error {
 	if err == nil {
 		logActivity("info", "ipmi", host, "Power off command sent")
 		if host.Hostname != "" {
-			label := fmt.Sprintf("unused-%s", time.Now().Format("20060102-150405"))
-			if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-				logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
-			} else {
-				logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-			}
+			go func() {
+				label := fmt.Sprintf("unused-%s", time.Now().Format("20060102-150405"))
+				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+					logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
+				} else {
+					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+				}
+			}()
 		}
 	}
 	return err
@@ -733,16 +737,18 @@ func ipmiRestart(host *Host) error {
 	if err == nil {
 		logActivity("info", "ipmi", host, fmt.Sprintf("Power cycle command sent (%s)", bootMsg))
 		if host.Hostname != "" {
-			imageName := host.CurrentImage
-			if host.NextImage != nil && *host.NextImage != "" {
-				imageName = *host.NextImage
-			}
-			label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
-			if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-				logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
-			} else {
-				logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-			}
+			go func() {
+				imgName := host.CurrentImage
+				if host.NextImage != nil && *host.NextImage != "" {
+					imgName = *host.NextImage
+				}
+				label := fmt.Sprintf("%s-%s", imgName, time.Now().Format("20060102-150405"))
+				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+					logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
+				} else {
+					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
+				}
+			}()
 		}
 	}
 	return err
@@ -3060,6 +3066,9 @@ func syncBMHToHosts(bmhs []bmhObject) {
 		}
 
 		// Host exists, check for changes
+		// NOTE: Do NOT update current_image here — that is a user-managed field.
+		// BMH sync only sets current_image on initial creation; after that the
+		// user controls it via the UI/API.
 		changed := false
 		updates := []string{}
 		args := []interface{}{}
@@ -3067,11 +3076,6 @@ func syncBMHToHosts(bmhs []bmhObject) {
 		if existing.Hostname != hostname {
 			updates = append(updates, "hostname = ?")
 			args = append(args, hostname)
-			changed = true
-		}
-		if existing.CurrentImage != image {
-			updates = append(updates, "current_image = ?")
-			args = append(args, image)
 			changed = true
 		}
 		if bmh.Spec.BMC.Address != "" && (existing.IPMIIP == nil || *existing.IPMIIP != bmh.Spec.BMC.Address) {
