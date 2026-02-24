@@ -285,7 +285,7 @@ func initDB() error {
 
 	// Insert default images if not exist
 	defaultImages := []Image{
-		{Name: "baremetalservices", Kernel: "vmlinuz", Initrd: "initramfs", Append: "vga=normal console=tty0 console=ttyS1,115200n8 ip=dhcp iomem=relaxed", Type: "linux"},
+		{Name: "baremetalservices", Kernel: "vmlinuz", Initrd: "initramfs", Append: "vga=normal console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8 ip=dhcp iomem=relaxed", Type: "linux"},
 		{Name: "localboot", Kernel: "", Initrd: "", Append: "", Type: "local"},
 	}
 
