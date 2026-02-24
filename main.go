@@ -287,6 +287,7 @@ func initDB() error {
 	defaultImages := []Image{
 		{Name: "baremetalservices", Kernel: "vmlinuz", Initrd: "initramfs", Append: "quiet console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8 ip=dhcp iomem=relaxed", Type: "linux"},
 		{Name: "localboot", Kernel: "", Initrd: "", Append: "", Type: "local"},
+		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
 	}
 
 	for _, img := range defaultImages {

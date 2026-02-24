@@ -6,3 +6,5 @@ pxemanager.db
 .last-build
 vmlinuz
 initramfs
+fedora-vmlinuz
+fedora-initrd.img

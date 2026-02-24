@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0] - 2026-02-24
+
+### Added
+- Fedora 43 Server autoinstall image with kickstart (`fedora-ks.cfg`)
+- PXE boot files for Fedora 43 (vmlinuz + initrd.img) baked into container image
+- Kickstart config: SSH key auth only, autopart on sda, standard server packages, serial console for IPMI SOL
+- Default `fedora43` image auto-created in database on startup
+
 ## [0.7.4] - 2026-02-24
 
 ### Added

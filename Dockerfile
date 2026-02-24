@@ -10,6 +10,9 @@ COPY boot.ipxe /opt/pxemanager/defaults/boot.ipxe
 COPY memdisk /opt/pxemanager/defaults/memdisk
 COPY vmlinuz /opt/pxemanager/defaults/vmlinuz
 COPY initramfs /opt/pxemanager/defaults/initramfs
+COPY fedora-vmlinuz /opt/pxemanager/defaults/fedora-vmlinuz
+COPY fedora-initrd.img /opt/pxemanager/defaults/fedora-initrd.img
+COPY fedora-ks.cfg /opt/pxemanager/defaults/fedora-ks.cfg
 
 EXPOSE 69/udp
 EXPOSE 80/tcp
