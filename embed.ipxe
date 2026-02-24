@@ -1,4 +1,4 @@
 #!ipxe
 
 dhcp
-chain http://192.168.10.200/ipxe?mac=${net0/mac} || shell
+chain http://pxe.g10.lo/ipxe?mac=${net0/mac} || shell

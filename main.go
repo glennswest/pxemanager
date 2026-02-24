@@ -1274,7 +1274,7 @@ func handleBootIPXE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprint(w, `#!ipxe
 dhcp
-chain http://192.168.10.200/ipxe?mac=${net0/mac} || shell
+chain http://pxe.g10.lo/ipxe?mac=${net0/mac} || shell
 `)
 }
 
@@ -1436,7 +1436,7 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpBase := "http://192.168.10.200/files/"
+	httpBase := "http://pxe.g10.lo/files/"
 
 	script := "#!ipxe\n"
 	script += fmt.Sprintf("echo Booting %s for %s (%s)\n", imageName, host.Hostname, mac)
