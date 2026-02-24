@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.4] - 2026-02-23
+
+### Added
+- UEFI PXE boot support — `ipxe.efi` binary baked into image alongside `undionly.kpxe`
+- Dockerfile.ipxe updated to build both BIOS (`undionly.kpxe`) and EFI (`ipxe.efi`) binaries
+
+### Fixed
+- Dell/UEFI servers (server30) can now PXE boot — microdns serves `ipxe.efi` to UEFI clients via DHCP option 93 detection
+
 ## [0.7.3] - 2026-02-23
 
 ### Added
