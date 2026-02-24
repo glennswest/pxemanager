@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.7.3] - 2026-02-23
+
+### Added
+- IPMI power cycle end-to-end test script (`scripts/test-ipmi-cycle.sh`) — exercises power off, power on, restart via pxemanager API with status polling and ipmiserial console log rotation verification
+
 ## [0.7.2] - 2026-02-23
 
 ### Fixed
