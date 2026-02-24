@@ -1,13 +1,18 @@
 # Changelog
 
-## [0.7.4] - 2026-02-23
+## [0.7.4] - 2026-02-24
 
 ### Added
-- UEFI PXE boot support — `ipxe.efi` binary baked into image alongside `undionly.kpxe`
-- Dockerfile.ipxe updated to build both BIOS (`undionly.kpxe`) and EFI (`ipxe.efi`) binaries
+- UEFI PXE boot support — `snponly.efi` (as `ipxe.efi`) baked into image alongside `undionly.kpxe`
+- Dockerfile.ipxe builds BIOS (`undionly.kpxe`), EFI (`ipxe.efi`), and SNP-only (`snponly.efi`) binaries
+- Dual serial console support — kernel args include both `ttyS0` (Dell iDRAC) and `ttyS1` (Supermicro)
 
 ### Fixed
 - Dell/UEFI servers (server30) can now PXE boot — microdns serves `ipxe.efi` to UEFI clients via DHCP option 93 detection
+- Use `snponly.efi` for UEFI PXE — reuses firmware NIC driver instead of loading its own (fixes Dell R730xd)
+
+### Changed
+- Registry URL updated from `192.168.200.2:5000` to `registry.gt.lo:5000`
 
 ## [0.7.3] - 2026-02-23
 
