@@ -7,6 +7,7 @@
 - IPMI power on/off/restart no longer blocks waiting for ipmiserial console log rotation (moved to background goroutine)
 - All iPXE chain/boot URLs use DNS (`pxe.g10.lo`) instead of hardcoded IP — works when container IP changes
 - embed.ipxe, boot.ipxe, handleBootIPXE, and kernel/initrd httpBase all use `pxe.g10.lo`
+- Boot file sync now checksums existing files and replaces them when the image has newer versions
 
 ## [0.7.0] - 2026-02-23
 

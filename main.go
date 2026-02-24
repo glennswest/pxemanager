@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"embed"
@@ -2916,8 +2917,7 @@ const defaultsDir = "/opt/pxemanager/defaults"
 const tftpbootDir = "/tftpboot"
 
 // ensureBootFiles copies default PXE boot files from the image defaults
-// directory to /tftpboot if they are missing. This handles the case where
-// the tftpboot volume is empty (first deploy, volume loss, etc).
+// directory to /tftpboot, replacing any that differ from the baked-in version.
 func ensureBootFiles() {
 	os.MkdirAll(tftpbootDir, 0755)
 
@@ -2931,21 +2931,30 @@ func ensureBootFiles() {
 		if entry.IsDir() {
 			continue
 		}
-		dst := filepath.Join(tftpbootDir, entry.Name())
-		if _, err := os.Stat(dst); err == nil {
-			continue // already exists
-		}
 		src := filepath.Join(defaultsDir, entry.Name())
-		data, err := os.ReadFile(src)
+		dst := filepath.Join(tftpbootDir, entry.Name())
+
+		srcData, err := os.ReadFile(src)
 		if err != nil {
 			log.Printf("Boot files: failed to read %s: %v", src, err)
 			continue
 		}
-		if err := os.WriteFile(dst, data, 0644); err != nil {
+
+		srcHash := sha256.Sum256(srcData)
+
+		if dstData, err := os.ReadFile(dst); err == nil {
+			dstHash := sha256.Sum256(dstData)
+			if srcHash == dstHash {
+				continue // identical
+			}
+			log.Printf("Boot files: %s changed, replacing", entry.Name())
+		}
+
+		if err := os.WriteFile(dst, srcData, 0644); err != nil {
 			log.Printf("Boot files: failed to write %s: %v", dst, err)
 			continue
 		}
-		log.Printf("Boot files: restored %s from defaults", entry.Name())
+		log.Printf("Boot files: installed %s", entry.Name())
 	}
 }
 
