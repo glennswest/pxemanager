@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.7.1] - 2026-02-23
+## [0.7.2] - 2026-02-23
 
 ### Fixed
 - BMH sync no longer overwrites `current_image` on existing hosts — user selections now persist across sync cycles
@@ -8,6 +8,9 @@
 - All iPXE chain/boot URLs use DNS (`pxe.g10.lo`) instead of hardcoded IP — works when container IP changes
 - embed.ipxe, boot.ipxe, handleBootIPXE, and kernel/initrd httpBase all use `pxe.g10.lo`
 - Boot file sync now checksums existing files and replaces them when the image has newer versions
+
+### Added
+- DHCP reservation test script (`scripts/test-dhcp-reservation.sh`)
 
 ## [0.7.0] - 2026-02-23
 
