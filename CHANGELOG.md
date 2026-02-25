@@ -18,6 +18,7 @@
 - Cockpit firewall port (9090/tcp) opened on fedora43 server kickstart
 - Cockpit package and socket enabled on fedora43 server kickstart
 - Builder kickstart: replaced `autopart` with explicit partitions (1G /boot, 4G swap, rest to /) — autopart was creating huge swap leaving no space for container images
+- CoreOS builder.ign: removed `sudo` from core user groups — group doesn't exist on Fedora CoreOS, caused Ignition to fail silently (no users, SSH, or services configured)
 
 ## [0.8.0] - 2026-02-24
 
