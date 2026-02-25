@@ -47,6 +47,16 @@
         "enabled": true
       },
       {
+        "name": "podman-tcp.socket",
+        "enabled": true,
+        "contents": "[Unit]\nDescription=Podman API TCP Socket\n\n[Socket]\nListenStream=2375\nAccept=no\n\n[Install]\nWantedBy=sockets.target\n"
+      },
+      {
+        "name": "podman-tcp.service",
+        "enabled": false,
+        "contents": "[Unit]\nDescription=Podman API TCP Service\nRequires=podman-tcp.socket\nAfter=podman-tcp.socket\nBindsTo=podman-tcp.socket\n\n[Service]\nType=exec\nExecStart=/usr/bin/podman system service --time=0 tcp://0.0.0.0:2375\nKillMode=process\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n"
+      },
+      {
         "name": "rpm-ostree-install.service",
         "enabled": true,
         "contents": "[Unit]\nDescription=Layer buildah, skopeo, and cockpit on first boot\nAfter=network-online.target\nWants=network-online.target\nConditionPathExists=!/var/lib/%N.stamp\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/rpm-ostree install --idempotent --allow-inactive buildah skopeo cockpit cockpit-podman\nExecStart=/bin/touch /var/lib/%N.stamp\nExecStart=/usr/bin/systemctl reboot\n\n[Install]\nWantedBy=multi-user.target\n"
@@ -59,7 +69,21 @@
         "path": "/etc/profile.d/builder.sh",
         "mode": 420,
         "contents": {
-          "source": "data:,alias%20docker%3Dpodman%0A"
+          "source": "data:,alias%20docker%3Dpodman%0Aexport%20CONTAINER_HOST%3Dtcp%3A%2F%2Flocalhost%3A2375%0A"
+        }
+      },
+      {
+        "path": "/etc/firewalld/services/cockpit-podman.xml",
+        "mode": 420,
+        "contents": {
+          "source": "data:,%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22utf-8%22%3F%3E%0A%3Cservice%3E%0A%20%20%3Cshort%3ECockpit%20%2B%20Podman%3C%2Fshort%3E%0A%20%20%3Cport%20protocol%3D%22tcp%22%20port%3D%229090%22%2F%3E%0A%20%20%3Cport%20protocol%3D%22tcp%22%20port%3D%222375%22%2F%3E%0A%3C%2Fservice%3E%0A"
+        }
+      },
+      {
+        "path": "/etc/firewalld/zones/public.xml",
+        "mode": 420,
+        "contents": {
+          "source": "data:,%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22utf-8%22%3F%3E%0A%3Czone%3E%0A%20%20%3Cshort%3EPublic%3C%2Fshort%3E%0A%20%20%3Cservice%20name%3D%22ssh%22%2F%3E%0A%20%20%3Cservice%20name%3D%22dhcpv6-client%22%2F%3E%0A%20%20%3Cservice%20name%3D%22cockpit%22%2F%3E%0A%20%20%3Cport%20protocol%3D%22tcp%22%20port%3D%229090%22%2F%3E%0A%20%20%3Cport%20protocol%3D%22tcp%22%20port%3D%222375%22%2F%3E%0A%3C%2Fzone%3E%0A"
         }
       }
     ]

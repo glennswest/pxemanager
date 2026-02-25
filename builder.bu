@@ -31,6 +31,35 @@ systemd:
       enabled: true
     - name: podman.socket
       enabled: true
+    - name: podman-tcp.socket
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Podman API TCP Socket
+
+        [Socket]
+        ListenStream=2375
+        Accept=no
+
+        [Install]
+        WantedBy=sockets.target
+    - name: podman-tcp.service
+      enabled: false
+      contents: |
+        [Unit]
+        Description=Podman API TCP Service
+        Requires=podman-tcp.socket
+        After=podman-tcp.socket
+        BindsTo=podman-tcp.socket
+
+        [Service]
+        Type=exec
+        ExecStart=/usr/bin/podman system service --time=0 tcp://0.0.0.0:2375
+        KillMode=process
+        Restart=on-failure
+
+        [Install]
+        WantedBy=default.target
     - name: rpm-ostree-install.service
       enabled: true
       contents: |
@@ -59,3 +88,17 @@ storage:
       contents:
         inline: |
           alias docker=podman
+          export CONTAINER_HOST=tcp://localhost:2375
+    - path: /etc/firewalld/zones/public.xml
+      mode: 0644
+      contents:
+        inline: |
+          <?xml version="1.0" encoding="utf-8"?>
+          <zone>
+            <short>Public</short>
+            <service name="ssh"/>
+            <service name="dhcpv6-client"/>
+            <service name="cockpit"/>
+            <port protocol="tcp" port="9090"/>
+            <port protocol="tcp" port="2375"/>
+          </zone>
