@@ -13,6 +13,11 @@
 ### Changed
 - `boot_local_after` auto-set now covers CoreOS images (not just Fedora kickstart images)
 
+### Fixed
+- Root password unlocked on all images (was `--lock`) — Cockpit dashboard requires password auth
+- Cockpit firewall port (9090/tcp) opened on fedora43 server kickstart
+- Cockpit package and socket enabled on fedora43 server kickstart
+
 ## [0.8.0] - 2026-02-24
 
 ### Added
