@@ -17,6 +17,7 @@
 - Root password unlocked on all images (was `--lock`) — Cockpit dashboard requires password auth
 - Cockpit firewall port (9090/tcp) opened on fedora43 server kickstart
 - Cockpit package and socket enabled on fedora43 server kickstart
+- Builder kickstart: replaced `autopart` with explicit partitions (1G /boot, 4G swap, rest to /) — autopart was creating huge swap leaving no space for container images
 
 ## [0.8.0] - 2026-02-24
 
