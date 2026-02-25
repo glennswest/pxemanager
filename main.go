@@ -693,6 +693,11 @@ func ipmiPowerOn(host *Host) error {
 				} else {
 					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
 				}
+				// Reconnect SOL session after power on
+				time.Sleep(2 * time.Second)
+				if err := reconnectConsole(host.Hostname); err != nil {
+					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
+				}
 			}()
 		}
 	}
@@ -758,6 +763,11 @@ func ipmiRestart(host *Host) error {
 				} else {
 					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
 				}
+				// Reconnect SOL session after power cycle
+				time.Sleep(2 * time.Second)
+				if err := reconnectConsole(host.Hostname); err != nil {
+					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
+				}
 			}()
 		}
 	}
@@ -796,6 +806,22 @@ func ipmiSetBootDisk(host *Host) error {
 func rotateConsoleLogs(hostname, label string) error {
 	reqURL := fmt.Sprintf("%s/api/servers/%s/logs/rotate?name=%s",
 		ConsoleServerURL, hostname, url.QueryEscape(label))
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(reqURL, "application/json", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("console server returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// reconnectConsole tells ipmiserial to drop and re-establish the SOL session.
+// Called after power on/cycle since the BMC resets SOL on chassis events.
+func reconnectConsole(hostname string) error {
+	reqURL := fmt.Sprintf("%s/api/servers/%s/reconnect", ConsoleServerURL, hostname)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Post(reqURL, "application/json", nil)
 	if err != nil {
