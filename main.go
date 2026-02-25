@@ -687,6 +687,9 @@ func ipmiPowerOn(host *Host) error {
 				if host.NextImage != nil && *host.NextImage != "" {
 					imgName = *host.NextImage
 				}
+				if imgName == "" || imgName == "localboot" {
+					imgName = "disk"
+				}
 				label := fmt.Sprintf("%s-%s", imgName, time.Now().Format("20060102-150405"))
 				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
 					logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
@@ -716,7 +719,11 @@ func ipmiPowerOff(host *Host) error {
 		logActivity("info", "ipmi", host, "Power off command sent")
 		if host.Hostname != "" {
 			go func() {
-				label := fmt.Sprintf("unused-%s", time.Now().Format("20060102-150405"))
+				imgName := host.CurrentImage
+				if imgName == "" || imgName == "localboot" {
+					imgName = "poweroff"
+				}
+				label := fmt.Sprintf("%s-%s", imgName, time.Now().Format("20060102-150405"))
 				if err := rotateConsoleLogs(host.Hostname, label); err != nil {
 					logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
 				} else {
@@ -756,6 +763,9 @@ func ipmiRestart(host *Host) error {
 				imgName := host.CurrentImage
 				if host.NextImage != nil && *host.NextImage != "" {
 					imgName = *host.NextImage
+				}
+				if imgName == "" || imgName == "localboot" {
+					imgName = "disk"
 				}
 				label := fmt.Sprintf("%s-%s", imgName, time.Now().Format("20060102-150405"))
 				if err := rotateConsoleLogs(host.Hostname, label); err != nil {

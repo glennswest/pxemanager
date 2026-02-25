@@ -4,6 +4,8 @@
 
 ### Fixed
 - CoreOS serial console: add `--append-karg console=tty0/ttyS0/ttyS1` to coreos-installer command so kernel console args are in BLS entry from first boot (was invisible on serial until Ignition's `kernelArguments.shouldExist` ran + reboot)
+- Console log naming: power off now labels logs with the running image name instead of "unused"
+- Console log naming: power on/restart label logs "disk" instead of "localboot" when host is in localboot mode
 
 ## [0.9.0] - 2026-02-24
 
