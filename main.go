@@ -287,7 +287,7 @@ func initDB() error {
 	defaultImages := []Image{
 		{Name: "baremetalservices", Kernel: "vmlinuz", Initrd: "initramfs", Append: "quiet console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8 ip=dhcp iomem=relaxed", Type: "linux"},
 		{Name: "localboot", Kernel: "", Initrd: "", Append: "", Type: "local"},
-		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
+		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
 	}
 
 	for _, img := range defaultImages {
@@ -297,6 +297,10 @@ func initDB() error {
 			log.Printf("Warning: failed to insert default image %s: %v", img.Name, err)
 		}
 	}
+
+	// Update fedora43 append line to include inst.stage2 (fix for missing stage2 error)
+	db.Exec(`UPDATE images SET append = ? WHERE name = 'fedora43' AND append NOT LIKE '%inst.stage2%'`,
+		"inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8")
 
 	return nil
 }

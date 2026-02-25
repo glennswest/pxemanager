@@ -8,6 +8,9 @@
 - Kickstart config: SSH key auth only, autopart on sda, standard server packages, serial console for IPMI SOL
 - Default `fedora43` image auto-created in database on startup
 
+### Fixed
+- Fedora PXE boot: added `inst.stage2` to kernel args (Anaconda needs stage2 image URL to boot installer)
+
 ## [0.7.4] - 2026-02-24
 
 ### Added
