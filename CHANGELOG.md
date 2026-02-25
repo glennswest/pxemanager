@@ -16,6 +16,7 @@
 
 ### Fixed
 - Fedora images now set `boot_local_after` so IPMI switches to disk boot after installer completes (prevents PXE loop)
+- Builder kickstart: moved `--nodefaults` to `%packages` header (Fedora 43 DNF5 doesn't support `@core --nodefaults` inline syntax)
 
 ## [0.7.4] - 2026-02-24
 
