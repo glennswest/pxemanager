@@ -694,7 +694,7 @@ func ipmiPowerOn(host *Host) error {
 					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
 				}
 				// Reconnect SOL session after power on
-				time.Sleep(2 * time.Second)
+				time.Sleep(15 * time.Second)
 				if err := reconnectConsole(host.Hostname); err != nil {
 					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
 				}
@@ -764,7 +764,7 @@ func ipmiRestart(host *Host) error {
 					logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
 				}
 				// Reconnect SOL session after power cycle
-				time.Sleep(2 * time.Second)
+				time.Sleep(15 * time.Second)
 				if err := reconnectConsole(host.Hostname); err != nil {
 					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
 				}
