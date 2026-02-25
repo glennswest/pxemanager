@@ -10,14 +10,15 @@
         "sshAuthorizedKeys": [
           "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDWUsb0I159v27vSBuOOyQMX54iD2zuKZOOy+e5GRCJ3yONNr3Mkdyng67BNfsnvlf8kpgSi0yiaVGeXKSjkrY9YPHe0wkVW0UHZ9uZqYqgVdEzSG3Z0NNkrd/zp3jCztPad+q6iWb1R0iFlK7/h8NihOky9HXOustrtDwnvTgONwJnluxQp1zl86deKP0W9xx3Ky/Jobr3dbfOhJVK3qzF6OL6KaNjpT+hDYjh1OISzrx1jWLxFvZ4r7X2wbRhcNRyD5sTrxcs3z5Xdz/KRT0UhIj47CF4Heoiqtl/aQ5kdjpRqlmC2spJ9WZinsqbb6HhZ1i8Yd2ZycDQZF+S8n1n gwest@Glenns-MacBook-Pro.local"
         ]
+      },
+      {
+        "name": "core",
+        "passwordHash": "$6$Bd4hdMwcRKfCTwGa$sSIqDulcHrKIfq9Et/DXUpQON457yKD1e3P.kpsPoApTcdn84pFGOMWpZE1dU69bl5IFH3abVPeiT5KjiEUNN/",
+        "sshAuthorizedKeys": [
+          "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDWUsb0I159v27vSBuOOyQMX54iD2zuKZOOy+e5GRCJ3yONNr3Mkdyng67BNfsnvlf8kpgSi0yiaVGeXKSjkrY9YPHe0wkVW0UHZ9uZqYqgVdEzSG3Z0NNkrd/zp3jCztPad+q6iWb1R0iFlK7/h8NihOky9HXOustrtDwnvTgONwJnluxQp1zl86deKP0W9xx3Ky/Jobr3dbfOhJVK3qzF6OL6KaNjpT+hDYjh1OISzrx1jWLxFvZ4r7X2wbRhcNRyD5sTrxcs3z5Xdz/KRT0UhIj47CF4Heoiqtl/aQ5kdjpRqlmC2spJ9WZinsqbb6HhZ1i8Yd2ZycDQZF+S8n1n gwest@Glenns-MacBook-Pro.local"
+        ],
+        "groups": ["wheel", "sudo"]
       }
-    ]
-  },
-  "kernelArguments": {
-    "shouldExist": [
-      "console=tty0",
-      "console=ttyS0,115200n8",
-      "console=ttyS1,115200n8"
     ]
   },
   "systemd": {
@@ -29,31 +30,14 @@
       {
         "name": "serial-getty@ttyS1.service",
         "enabled": true
-      },
-      {
-        "name": "podman.socket",
-        "enabled": true
-      },
-      {
-        "name": "cockpit.socket",
-        "enabled": true
-      },
-      {
-        "name": "rpm-ostree-install.service",
-        "enabled": true,
-        "contents": "[Unit]\nDescription=Layer buildah, skopeo, and cockpit on first boot\nAfter=network-online.target\nWants=network-online.target\nConditionPathExists=!/var/lib/%N.stamp\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/rpm-ostree install --idempotent --allow-inactive buildah skopeo cockpit cockpit-podman\nExecStart=/bin/touch /var/lib/%N.stamp\nExecStart=/usr/bin/systemctl reboot\n\n[Install]\nWantedBy=multi-user.target\n"
       }
     ]
   },
-  "storage": {
-    "files": [
-      {
-        "path": "/etc/profile.d/builder.sh",
-        "mode": 420,
-        "contents": {
-          "source": "data:,alias%20docker%3Dpodman%0A"
-        }
-      }
+  "kernelArguments": {
+    "shouldExist": [
+      "console=tty0",
+      "console=ttyS0,115200n8",
+      "console=ttyS1,115200n8"
     ]
   }
 }
