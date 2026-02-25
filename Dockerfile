@@ -14,6 +14,10 @@ COPY fedora-vmlinuz /opt/pxemanager/defaults/fedora-vmlinuz
 COPY fedora-initrd.img /opt/pxemanager/defaults/fedora-initrd.img
 COPY fedora-ks.cfg /opt/pxemanager/defaults/fedora-ks.cfg
 COPY fedora-builder-ks.cfg /opt/pxemanager/defaults/fedora-builder-ks.cfg
+COPY coreos-kernel /opt/pxemanager/defaults/coreos-kernel
+COPY coreos-initramfs /opt/pxemanager/defaults/coreos-initramfs
+COPY coreos-rootfs.img /opt/pxemanager/defaults/coreos-rootfs.img
+COPY builder.ign /opt/pxemanager/defaults/builder.ign
 
 EXPOSE 69/udp
 EXPOSE 80/tcp

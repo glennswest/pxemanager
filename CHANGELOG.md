@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.0] - 2026-02-24
+
+### Added
+- Fedora CoreOS `coreos-builder` image — PXE installs CoreOS to disk with Ignition config
+- Dual serial console support (ttyS0 Dell + ttyS1 Supermicro) in CoreOS builder
+- Ignition config (`builder.ign`) with SSH key auth, podman socket, cockpit, buildah/skopeo via rpm-ostree first-boot layering
+- Butane source config (`builder.bu`) for maintainable Ignition editing
+- CoreOS PXE files (kernel, initramfs, rootfs) auto-downloaded in build.sh from Fedora CoreOS stable stream
+- README: comprehensive section on adding images and setting up boot profiles (linux, ISO, CoreOS/Ignition, kickstart)
+
+### Changed
+- `boot_local_after` auto-set now covers CoreOS images (not just Fedora kickstart images)
+
 ## [0.8.0] - 2026-02-24
 
 ### Added

@@ -24,6 +24,23 @@ else
     echo "WARNING: baremetalservices boot files not found at $BMS_BOOT"
 fi
 
+# Download Fedora CoreOS PXE files if not present
+COREOS_STREAM="https://builds.coreos.fedoraproject.org/streams/stable.json"
+if [ ! -f coreos-kernel ] || [ ! -f coreos-initramfs ] || [ ! -f coreos-rootfs.img ]; then
+    echo "Downloading Fedora CoreOS PXE files ..."
+    STREAM_JSON=$(curl -sL "$COREOS_STREAM")
+    COREOS_KERNEL_URL=$(echo "$STREAM_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['architectures']['x86_64']['artifacts']['metal']['formats']['pxe']['kernel']['location'])")
+    COREOS_INITRAMFS_URL=$(echo "$STREAM_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['architectures']['x86_64']['artifacts']['metal']['formats']['pxe']['initramfs']['location'])")
+    COREOS_ROOTFS_URL=$(echo "$STREAM_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['architectures']['x86_64']['artifacts']['metal']['formats']['pxe']['rootfs']['location'])")
+
+    [ -f coreos-kernel ] || { echo "  Downloading kernel ..."; curl -sL -o coreos-kernel "$COREOS_KERNEL_URL"; }
+    [ -f coreos-initramfs ] || { echo "  Downloading initramfs ..."; curl -sL -o coreos-initramfs "$COREOS_INITRAMFS_URL"; }
+    [ -f coreos-rootfs.img ] || { echo "  Downloading rootfs (~900MB) ..."; curl -L -o coreos-rootfs.img "$COREOS_ROOTFS_URL"; }
+    echo "CoreOS PXE files downloaded"
+else
+    echo "CoreOS PXE files already present"
+fi
+
 echo "Building $REPO $FULL_VERSION ..."
 
 # Cross-compile for ARM64 Linux

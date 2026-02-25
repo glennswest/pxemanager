@@ -8,3 +8,6 @@ vmlinuz
 initramfs
 fedora-vmlinuz
 fedora-initrd.img
+coreos-kernel
+coreos-initramfs
+coreos-rootfs.img

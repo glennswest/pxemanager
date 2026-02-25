@@ -399,6 +399,181 @@ Log labels are automatically generated:
 3. Some ISOs require memdisk instead of sanboot
 4. Check activity log for boot attempts
 
+## Images and Boot Profiles
+
+PXE Manager supports four image types. Each image defines what a server boots into when it PXE boots.
+
+### Image Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `linux` | Kernel + initrd + kernel args | OS installers, live images, CoreOS |
+| `iso` | Direct HTTP ISO boot via iPXE `sanboot` | Pre-built ISOs (RHEL, Ubuntu, etc.) |
+| `memdisk` | Load entire image into RAM via SYSLINUX memdisk | Floppy images, small ISOs |
+| `local` | Exit iPXE, boot from local disk | Normal disk boot |
+
+### Built-in Images
+
+These images are auto-created on startup:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `baremetalservices` | linux | Discovery/management OS (dual serial ttyS0+ttyS1) |
+| `localboot` | local | Boot from local disk |
+| `fedora43` | linux | Fedora 43 Server kickstart install (ttyS1 serial) |
+| `fedora43-builder` | linux | Fedora 43 minimal builder with podman (ttyS1 serial) |
+| `coreos-builder` | linux | Fedora CoreOS builder with podman (dual serial ttyS0+ttyS1) |
+
+### Adding a Linux Kernel/Initrd Image
+
+1. Place kernel and initrd files in `/tftpboot/` (or bake into the container image under `/opt/pxemanager/defaults/`)
+2. Add via UI: **Images** tab, type `linux`, fill in kernel filename, initrd filename, and kernel args
+3. Or via API:
+
+```bash
+curl -X POST http://pxe.g10.lo/api/image/add \
+  -d 'name=myimage&kernel=my-vmlinuz&initrd=my-initrd.img&append=ip=dhcp console=ttyS0,115200n8&type=linux'
+```
+
+**Image flags:**
+- `boot_local_after=true` — After this image boots, set IPMI to disk boot (prevents PXE loop after installers)
+- `erase_boot_drive=true` — Trigger disk wipe workflow before booting
+- `erase_all_drives=true` — Wipe all drives before booting
+
+### Adding an ISO Image
+
+ISO images boot directly from an HTTP URL using iPXE `sanboot`:
+
+```bash
+# Via API
+curl -X POST http://pxe.g10.lo/api/image/iso \
+  -d 'name=rhel9&url=http://fastregistry.gw.lo/isos/rhel9.iso'
+
+# Or via UI: Images tab → type "iso" → enter name and full URL
+```
+
+### Adding a Fedora CoreOS Image (Ignition)
+
+CoreOS uses Ignition configs instead of kickstarts. The `coreos-builder` image is pre-configured, but you can create custom CoreOS profiles:
+
+1. **Write an Ignition config** (JSON) or Butane config (YAML, convert with `butane`):
+
+```yaml
+# my-server.bu — convert with: butane --strict my-server.bu > my-server.ign
+variant: fcos
+version: "1.5.0"
+passwd:
+  users:
+    - name: root
+      ssh_authorized_keys:
+        - "ssh-rsa AAAA..."
+kernel_arguments:
+  should_exist:
+    - console=tty0
+    - console=ttyS0,115200n8
+systemd:
+  units:
+    - name: podman.socket
+      enabled: true
+```
+
+2. **Place the `.ign` file** in `/tftpboot/` (it will be served at `http://pxe.g10.lo/files/my-server.ign`)
+
+3. **Create the image** with CoreOS kernel args:
+
+```bash
+curl -X POST http://pxe.g10.lo/api/image/add \
+  -d 'name=my-coreos' \
+  -d 'kernel=coreos-kernel' \
+  -d 'initrd=coreos-initramfs' \
+  -d 'append=coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://pxe.g10.lo/files/my-server.ign coreos.live.rootfs_url=http://pxe.g10.lo/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8' \
+  -d 'type=linux' \
+  -d 'boot_local_after=true'
+```
+
+**CoreOS kernel parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `coreos.inst.install_dev=/dev/sda` | Disk to install to (triggers auto-install) |
+| `coreos.inst.ignition_url=http://...` | Ignition config for the installed system |
+| `coreos.live.rootfs_url=http://...` | Live rootfs image (fetched at boot, ~900MB) |
+| `ip=dhcp` | Network config for live environment |
+| `console=ttyS0,115200n8` | Serial console (Dell iDRAC uses ttyS0, Supermicro uses ttyS1) |
+
+**CoreOS boot flow:**
+1. iPXE loads kernel + initramfs
+2. CoreOS fetches rootfs from `rootfs_url`
+3. Installer writes OS to disk using metal image from rootfs
+4. Ignition config is applied to the installed system
+5. Server reboots → `boot_local_after` switches IPMI to disk boot
+6. First disk boot: rpm-ostree layers additional packages, reboots once more
+7. Ready to use
+
+### Adding a Kickstart Image (Fedora/RHEL/CentOS)
+
+1. **Write a kickstart config** (see `fedora-ks.cfg` or `fedora-builder-ks.cfg` as examples)
+2. **Place it in `/tftpboot/`** or bake into the container
+3. **Create the image** pointing to the kickstart:
+
+```bash
+curl -X POST http://pxe.g10.lo/api/image/add \
+  -d 'name=my-fedora' \
+  -d 'kernel=fedora-vmlinuz' \
+  -d 'initrd=fedora-initrd.img' \
+  -d 'append=inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/my-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8' \
+  -d 'type=linux' \
+  -d 'boot_local_after=true'
+```
+
+### Serial Console Reference
+
+| Vendor | Serial Port | Kernel Arg |
+|--------|-------------|------------|
+| Dell (iDRAC) | ttyS0 | `console=ttyS0,115200n8` |
+| Supermicro | ttyS1 | `console=ttyS1,115200n8` |
+| Both (safe default) | ttyS0 + ttyS1 | `console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8` |
+
+The last `console=` parameter is the primary console. For dual-vendor environments, include both serial ports in kernel args.
+
+### Assigning Images to Hosts
+
+**One-time boot** (next boot only, then reverts):
+```bash
+# Via API
+curl -X POST 'http://pxe.g10.lo/api/host/set-image?mac=AA:BB:CC:DD:EE:FF&image=coreos-builder&next=true'
+
+# Via UI: click host → select image from dropdown → "Next Boot"
+```
+
+**Permanent change:**
+```bash
+curl -X POST 'http://pxe.g10.lo/api/host/set-image?mac=AA:BB:CC:DD:EE:FF&image=coreos-builder'
+
+# Via UI: click host → select image from dropdown → "Set Image"
+```
+
+**Boot cycle** (sequence of images):
+```bash
+# Boot baremetalservices first, then coreos-builder
+curl -X POST 'http://pxe.g10.lo/api/host/set-cycle?mac=AA:BB:CC:DD:EE:FF' \
+  -d '["baremetalservices","coreos-builder"]'
+```
+
+### Baking Files into the Container Image
+
+For production deployments, bake boot files into the container so they survive restarts:
+
+1. Add files to the project directory
+2. Add `COPY` lines to `Dockerfile`:
+   ```dockerfile
+   COPY my-kernel /opt/pxemanager/defaults/my-kernel
+   COPY my-initrd /opt/pxemanager/defaults/my-initrd
+   COPY my-config.ign /opt/pxemanager/defaults/my-config.ign
+   ```
+3. Files in `/opt/pxemanager/defaults/` are automatically copied to `/tftpboot/` on startup
+4. SHA256 checksums detect changes — updated files replace old versions automatically
+
 ## Development
 
 ### Running Locally
@@ -410,22 +585,6 @@ mkdir -p /tftpboot
 # Run
 go run main.go
 ```
-
-### Adding New Image Types
-
-**Linux kernel/initrd:**
-1. Add kernel/initrd to `/tftpboot/`
-2. Create image via API or UI with type `linux`
-3. Configure append parameters
-
-**ISO images:**
-1. Host ISO on HTTP server (e.g., `http://fastregistry.gw.lo/isos/`)
-2. Add via API: `POST /api/image/iso name=myiso&url=http://...`
-3. Or add via UI: Images tab → type `iso` → enter URL
-
-**Memdisk (floppy/small ISO):**
-1. Use type `memdisk` for images loaded entirely into RAM
-2. Requires memdisk binary in kernel field
 
 ## License
 
