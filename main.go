@@ -1432,8 +1432,10 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 	// Get full host info for IPMI operations (use host.ID since MAC might be an interface)
 	fullHost, _ := getHostByID(host.ID)
 
-	// Boot-local-after: set IPMI to boot from disk after this image boots
+	// Boot-local-after: set IPMI to boot from disk and switch host to localboot
+	// so subsequent restarts from the UI don't re-PXE boot the installer
 	if img.BootLocalAfter && fullHost != nil && fullHost.IPMIIP != nil && *fullHost.IPMIIP != "" {
+		db.Exec(`UPDATE hosts SET current_image = 'localboot' WHERE id = ?`, host.ID)
 		go func() {
 			if err := ipmiSetBootDisk(fullHost); err != nil {
 				logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set boot device to disk: %v", err))
