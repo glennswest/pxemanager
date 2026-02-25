@@ -4,8 +4,9 @@
 
 ### Fixed
 - CoreOS serial console: add `--append-karg console=tty0/ttyS0/ttyS1` to coreos-installer command so kernel console args are in BLS entry from first boot (was invisible on serial until Ignition's `kernelArguments.shouldExist` ran + reboot)
-- Console log naming: power off now labels logs with the running image name instead of "unused"
-- Console log naming: power on/restart label logs "disk" instead of "localboot" when host is in localboot mode
+- Console log rotation: removed duplicate rotations — was rotating on both IPMI power action AND iPXE boot, causing 2-3 rotations per boot cycle
+- Console log rotation: now only rotates on actual boot events (iPXE handler for PXE boots, IPMI for localboot/disk boots only)
+- Console log rotation: removed rotation on power off (no boot event, next boot will rotate)
 
 ## [0.9.0] - 2026-02-24
 
