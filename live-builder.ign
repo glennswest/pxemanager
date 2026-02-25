@@ -7,7 +7,7 @@
       {
         "name": "coreos-installer.service",
         "enabled": true,
-        "contents": "[Unit]\nDescription=Install CoreOS to disk\nAfter=network-online.target\nWants=network-online.target\nRequires=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/coreos-installer install /dev/sda --ignition-url http://192.168.10.200/files/builder.ign --insecure-ignition\nExecStartPost=/usr/bin/systemctl reboot\nStandardOutput=journal+console\nStandardError=journal+console\n\n[Install]\nWantedBy=multi-user.target\n"
+        "contents": "[Unit]\nDescription=Install CoreOS to disk\nAfter=network-online.target\nWants=network-online.target\nRequires=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/coreos-installer install /dev/sda --ignition-url http://192.168.10.200/files/builder.ign --insecure-ignition --append-karg console=tty0 --append-karg console=ttyS0,115200n8 --append-karg console=ttyS1,115200n8\nExecStartPost=/usr/bin/systemctl reboot\nStandardOutput=journal+console\nStandardError=journal+console\n\n[Install]\nWantedBy=multi-user.target\n"
       },
       {
         "name": "serial-getty@ttyS0.service",
