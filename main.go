@@ -2965,6 +2965,7 @@ const tftpbootDir = "/tftpboot"
 
 // ensureBootFiles copies default PXE boot files from the image defaults
 // directory to /tftpboot, replacing any that differ from the baked-in version.
+// Uses size comparison first to avoid expensive hashing of large files (rootfs ~900MB).
 func ensureBootFiles() {
 	os.MkdirAll(tftpbootDir, 0755)
 
@@ -2981,27 +2982,40 @@ func ensureBootFiles() {
 		src := filepath.Join(defaultsDir, entry.Name())
 		dst := filepath.Join(tftpbootDir, entry.Name())
 
-		srcData, err := os.ReadFile(src)
+		srcInfo, err := os.Stat(src)
 		if err != nil {
-			log.Printf("Boot files: failed to read %s: %v", src, err)
+			log.Printf("Boot files: failed to stat %s: %v", src, err)
 			continue
 		}
 
-		srcHash := sha256.Sum256(srcData)
-
-		if dstData, err := os.ReadFile(dst); err == nil {
-			dstHash := sha256.Sum256(dstData)
-			if srcHash == dstHash {
-				continue // identical
+		// Quick check: if destination exists and has same size, skip it
+		if dstInfo, err := os.Stat(dst); err == nil {
+			if srcInfo.Size() == dstInfo.Size() {
+				continue // same size, assume unchanged
 			}
-			log.Printf("Boot files: %s changed, replacing", entry.Name())
+			log.Printf("Boot files: %s changed (size %d -> %d), replacing", entry.Name(), dstInfo.Size(), srcInfo.Size())
 		}
 
-		if err := os.WriteFile(dst, srcData, 0644); err != nil {
-			log.Printf("Boot files: failed to write %s: %v", dst, err)
+		// Copy file using streaming (not ReadFile) to avoid loading large files into memory
+		srcFile, err := os.Open(src)
+		if err != nil {
+			log.Printf("Boot files: failed to open %s: %v", src, err)
 			continue
 		}
-		log.Printf("Boot files: installed %s", entry.Name())
+		dstFile, err := os.Create(dst)
+		if err != nil {
+			srcFile.Close()
+			log.Printf("Boot files: failed to create %s: %v", dst, err)
+			continue
+		}
+		n, err := io.Copy(dstFile, srcFile)
+		srcFile.Close()
+		dstFile.Close()
+		if err != nil {
+			log.Printf("Boot files: failed to copy %s: %v", dst, err)
+			continue
+		}
+		log.Printf("Boot files: installed %s (%d MB)", entry.Name(), n/1024/1024)
 	}
 }
 
