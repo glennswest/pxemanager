@@ -11,6 +11,9 @@
 ### Fixed
 - Fedora PXE boot: added `inst.stage2` to kernel args (Anaconda needs stage2 image URL to boot installer)
 
+### Added
+- `fedora43-builder` image: minimal Fedora with podman/buildah/skopeo + SSH only, no docs, no LVM, no extras
+
 ## [0.7.4] - 2026-02-24
 
 ### Added

@@ -13,6 +13,7 @@ COPY initramfs /opt/pxemanager/defaults/initramfs
 COPY fedora-vmlinuz /opt/pxemanager/defaults/fedora-vmlinuz
 COPY fedora-initrd.img /opt/pxemanager/defaults/fedora-initrd.img
 COPY fedora-ks.cfg /opt/pxemanager/defaults/fedora-ks.cfg
+COPY fedora-builder-ks.cfg /opt/pxemanager/defaults/fedora-builder-ks.cfg
 
 EXPOSE 69/udp
 EXPOSE 80/tcp
