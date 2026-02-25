@@ -289,7 +289,7 @@ func initDB() error {
 		{Name: "localboot", Kernel: "", Initrd: "", Append: "", Type: "local"},
 		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
 		{Name: "fedora43-builder", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-builder-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
-		{Name: "coreos-builder", Kernel: "coreos-kernel", Initrd: "coreos-initramfs", Append: "coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://pxe.g10.lo/files/builder.ign coreos.live.rootfs_url=http://pxe.g10.lo/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
+		{Name: "coreos-builder", Kernel: "coreos-kernel", Initrd: "coreos-initramfs", Append: "coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://192.168.10.200/files/builder.ign ignition.platform.id=metal coreos.live.rootfs_url=http://192.168.10.200/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 	}
 
 	for _, img := range defaultImages {
