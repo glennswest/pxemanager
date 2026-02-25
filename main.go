@@ -289,7 +289,7 @@ func initDB() error {
 		{Name: "localboot", Kernel: "", Initrd: "", Append: "", Type: "local"},
 		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 		{Name: "fedora43-builder", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-builder-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
-		{Name: "coreos-builder", Kernel: "coreos-kernel", Initrd: "coreos-initramfs", Append: "coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://192.168.10.200/files/builder.ign coreos.inst.insecure ignition.platform.id=metal coreos.live.rootfs_url=http://192.168.10.200/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
+		{Name: "coreos-builder", Kernel: "coreos-kernel", Initrd: "coreos-initramfs", Append: "ignition.config.url=http://192.168.10.200/files/live-builder.ign ignition.firstboot ignition.platform.id=metal coreos.live.rootfs_url=http://192.168.10.200/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 	}
 
 	for _, img := range defaultImages {
@@ -1433,13 +1433,22 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 	// Get full host info for IPMI operations (use host.ID since MAC might be an interface)
 	fullHost, _ := getHostByID(host.ID)
 
-	// Boot-local-after: set IPMI to boot from disk and switch host to localboot
-	// so subsequent restarts from the UI don't re-PXE boot the installer
+	// Boot-local-after: persistently set IPMI to boot from disk and switch host to localboot
+	// so subsequent restarts (including installer reboots) always boot from disk
 	if img.BootLocalAfter && fullHost != nil && fullHost.IPMIIP != nil && *fullHost.IPMIIP != "" {
 		db.Exec(`UPDATE hosts SET current_image = 'localboot' WHERE id = ?`, host.ID)
 		go func() {
-			if err := ipmiSetBootDisk(fullHost); err != nil {
+			client, err := getIPMIClient(fullHost)
+			if err != nil {
 				logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set boot device to disk: %v", err))
+				return
+			}
+			defer client.Close(context.Background())
+			// Use persistent=true so disk boot survives multiple reboots (installer reboot, rpm-ostree reboot, etc.)
+			if err := client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, true); err != nil {
+				logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set persistent boot device to disk: %v", err))
+			} else {
+				logActivity("info", "ipmi", fullHost, "Set persistent boot device to disk")
 			}
 		}()
 	}

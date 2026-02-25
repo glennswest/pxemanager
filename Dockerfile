@@ -18,6 +18,7 @@ COPY coreos-kernel /opt/pxemanager/defaults/coreos-kernel
 COPY coreos-initramfs /opt/pxemanager/defaults/coreos-initramfs
 COPY coreos-rootfs.img /opt/pxemanager/defaults/coreos-rootfs.img
 COPY builder.ign /opt/pxemanager/defaults/builder.ign
+COPY live-builder.ign /opt/pxemanager/defaults/live-builder.ign
 
 EXPOSE 69/udp
 EXPOSE 80/tcp

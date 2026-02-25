@@ -1,0 +1,22 @@
+{
+  "ignition": {
+    "version": "3.4.0"
+  },
+  "systemd": {
+    "units": [
+      {
+        "name": "coreos-installer.service",
+        "enabled": true,
+        "contents": "[Unit]\nDescription=Install CoreOS to disk\nAfter=network-online.target\nWants=network-online.target\nRequires=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/coreos-installer install /dev/sda --ignition-url http://192.168.10.200/files/builder.ign --insecure-ignition\nExecStartPost=/usr/bin/systemctl reboot\nStandardOutput=journal+console\nStandardError=journal+console\n\n[Install]\nWantedBy=multi-user.target\n"
+      },
+      {
+        "name": "serial-getty@ttyS0.service",
+        "enabled": true
+      },
+      {
+        "name": "serial-getty@ttyS1.service",
+        "enabled": true
+      }
+    ]
+  }
+}

@@ -21,6 +21,13 @@
       }
     ]
   },
+  "kernelArguments": {
+    "shouldExist": [
+      "console=tty0",
+      "console=ttyS0,115200n8",
+      "console=ttyS1,115200n8"
+    ]
+  },
   "systemd": {
     "units": [
       {
@@ -30,14 +37,31 @@
       {
         "name": "serial-getty@ttyS1.service",
         "enabled": true
+      },
+      {
+        "name": "podman.socket",
+        "enabled": true
+      },
+      {
+        "name": "cockpit.socket",
+        "enabled": true
+      },
+      {
+        "name": "rpm-ostree-install.service",
+        "enabled": true,
+        "contents": "[Unit]\nDescription=Layer buildah, skopeo, and cockpit on first boot\nAfter=network-online.target\nWants=network-online.target\nConditionPathExists=!/var/lib/%N.stamp\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/rpm-ostree install --idempotent --allow-inactive buildah skopeo cockpit cockpit-podman\nExecStart=/bin/touch /var/lib/%N.stamp\nExecStart=/usr/bin/systemctl reboot\n\n[Install]\nWantedBy=multi-user.target\n"
       }
     ]
   },
-  "kernelArguments": {
-    "shouldExist": [
-      "console=tty0",
-      "console=ttyS0,115200n8",
-      "console=ttyS1,115200n8"
+  "storage": {
+    "files": [
+      {
+        "path": "/etc/profile.d/builder.sh",
+        "mode": 420,
+        "contents": {
+          "source": "data:,alias%20docker%3Dpodman%0A"
+        }
+      }
     ]
   }
 }
