@@ -287,8 +287,8 @@ func initDB() error {
 	defaultImages := []Image{
 		{Name: "baremetalservices", Kernel: "vmlinuz", Initrd: "initramfs", Append: "quiet console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8 ip=dhcp iomem=relaxed", Type: "linux"},
 		{Name: "localboot", Kernel: "", Initrd: "", Append: "", Type: "local"},
-		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
-		{Name: "fedora43-builder", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-builder-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8", Type: "linux"},
+		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
+		{Name: "fedora43-builder", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-builder-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 		{Name: "coreos-builder", Kernel: "coreos-kernel", Initrd: "coreos-initramfs", Append: "coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://192.168.10.200/files/builder.ign ignition.platform.id=metal coreos.live.rootfs_url=http://192.168.10.200/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 	}
 
@@ -301,8 +301,8 @@ func initDB() error {
 	}
 
 	// Update fedora43 append line to include inst.stage2 (fix for missing stage2 error)
-	db.Exec(`UPDATE images SET append = ? WHERE name = 'fedora43' AND append NOT LIKE '%inst.stage2%'`,
-		"inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8")
+	db.Exec(`UPDATE images SET append = ? WHERE name = 'fedora43' AND append NOT LIKE '%ttyS0%'`,
+		"inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8")
 
 	// Ensure boot_local_after is set on installer images (they reboot after install)
 	db.Exec(`UPDATE images SET boot_local_after = 1 WHERE (name LIKE 'fedora%' OR name LIKE 'coreos%') AND boot_local_after = 0`)
