@@ -303,6 +303,9 @@ func initDB() error {
 	db.Exec(`UPDATE images SET append = ? WHERE name = 'fedora43' AND append NOT LIKE '%inst.stage2%'`,
 		"inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://pxe.g10.lo/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS1,115200n8")
 
+	// Ensure boot_local_after is set on fedora images (installer reboots after install)
+	db.Exec(`UPDATE images SET boot_local_after = 1 WHERE name LIKE 'fedora%' AND boot_local_after = 0`)
+
 	return nil
 }
 

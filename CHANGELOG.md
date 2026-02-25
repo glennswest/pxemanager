@@ -14,6 +14,9 @@
 ### Added
 - `fedora43-builder` image: minimal Fedora with podman/buildah/skopeo + SSH only, no docs, no LVM, no extras
 
+### Fixed
+- Fedora images now set `boot_local_after` so IPMI switches to disk boot after installer completes (prevents PXE loop)
+
 ## [0.7.4] - 2026-02-24
 
 ### Added
