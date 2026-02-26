@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.11.0] - 2026-02-26
+
+### Added
+- Split image architecture: app image (~13 MB) + data image (~1.3 GB) for fast code-only deploys
+- `Dockerfile.data` for large boot files (kernels, initramfs, CoreOS rootfs)
+- `build.sh --data` flag to build data image separately
+- `deploy.sh --data` and `--all` flags for selective push
+- On-startup registry pull: missing large boot files fetched from `pxemanager-data` image via Docker Registry HTTP API v2
+- Digest caching (`.data-digest`) — skips pull when data image unchanged
+- `REGISTRY_URL` env var for configurable registry endpoint
+
+### Changed
+- `Dockerfile` no longer includes large boot files (7 COPY lines removed)
+- `ensureBootFiles()` now handles small files from defaults dir + large files from registry
+- `build.sh` refactored with `ensure_boot_files()` function, only downloads CoreOS/baremetalservices files when building data image
+
 ## [0.10.0] - 2026-02-26
 
 ### Fixed
