@@ -7,11 +7,11 @@ version: "1.5.0"
 passwd:
   users:
     - name: root
-      password_hash: "$6$Bd4hdMwcRKfCTwGa$sSIqDulcHrKIfq9Et/DXUpQON457yKD1e3P.kpsPoApTcdn84pFGOMWpZE1dU69bl5IFH3abVPeiT5KjiEUNN/"
+      password_hash: "$6$Bd4hdMwcRKfCTwGa$dt5sIpVpgPjW83MK2IxD.I9daQwi/kRAsQ8BzNr0Wd5E/uSLGbeVNDpZQgsHEsA/86sOAjgCkPy8WFYu5JtA6."
       ssh_authorized_keys:
         - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDWUsb0I159v27vSBuOOyQMX54iD2zuKZOOy+e5GRCJ3yONNr3Mkdyng67BNfsnvlf8kpgSi0yiaVGeXKSjkrY9YPHe0wkVW0UHZ9uZqYqgVdEzSG3Z0NNkrd/zp3jCztPad+q6iWb1R0iFlK7/h8NihOky9HXOustrtDwnvTgONwJnluxQp1zl86deKP0W9xx3Ky/Jobr3dbfOhJVK3qzF6OL6KaNjpT+hDYjh1OISzrx1jWLxFvZ4r7X2wbRhcNRyD5sTrxcs3z5Xdz/KRT0UhIj47CF4Heoiqtl/aQ5kdjpRqlmC2spJ9WZinsqbb6HhZ1i8Yd2ZycDQZF+S8n1n gwest@Glenns-MacBook-Pro.local"
     - name: core
-      password_hash: "$6$Bd4hdMwcRKfCTwGa$sSIqDulcHrKIfq9Et/DXUpQON457yKD1e3P.kpsPoApTcdn84pFGOMWpZE1dU69bl5IFH3abVPeiT5KjiEUNN/"
+      password_hash: "$6$Bd4hdMwcRKfCTwGa$dt5sIpVpgPjW83MK2IxD.I9daQwi/kRAsQ8BzNr0Wd5E/uSLGbeVNDpZQgsHEsA/86sOAjgCkPy8WFYu5JtA6."
       ssh_authorized_keys:
         - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDWUsb0I159v27vSBuOOyQMX54iD2zuKZOOy+e5GRCJ3yONNr3Mkdyng67BNfsnvlf8kpgSi0yiaVGeXKSjkrY9YPHe0wkVW0UHZ9uZqYqgVdEzSG3Z0NNkrd/zp3jCztPad+q6iWb1R0iFlK7/h8NihOky9HXOustrtDwnvTgONwJnluxQp1zl86deKP0W9xx3Ky/Jobr3dbfOhJVK3qzF6OL6KaNjpT+hDYjh1OISzrx1jWLxFvZ4r7X2wbRhcNRyD5sTrxcs3z5Xdz/KRT0UhIj47CF4Heoiqtl/aQ5kdjpRqlmC2spJ9WZinsqbb6HhZ1i8Yd2ZycDQZF+S8n1n gwest@Glenns-MacBook-Pro.local"
       groups:
