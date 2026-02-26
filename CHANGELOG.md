@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0] - 2026-02-26
+
+### Fixed
+- BMH sync now fetches from the data/PXE network (g10) instead of hardcoded g11 — hosts get correct Intel NIC MACs that match PXE boot requests
+- IPMI IP resolved from IPMI network (g11) DHCP reservations by hostname instead of BMH bmc.address (which was the data IP)
+- `boot_local_after` now works because hosts have real IPMI IPs
+- Auto-configure IPMI uses IPMI network DHCP reservations with dynamic domain fallback
+
+### Added
+- Network CRD discovery: fetches `/api/v1/networks` from mkube to auto-detect PXE and IPMI networks by type
+- IPMI IP lookup map built from IPMI network DHCP reservations (hostname → IPMI IP)
+- Networks refreshed on each 5-minute sync cycle
+
 ## [0.9.1] - 2026-02-25
 
 ### Fixed

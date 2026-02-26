@@ -1994,13 +1994,22 @@ func handleAPIHostsAutoConfigure(w http.ResponseWriter, r *http.Request) {
 	configured := 0
 	for _, host := range hosts {
 		if host.Hostname != "" && (host.IPMIIP == nil || *host.IPMIIP == "") {
-			// Auto-configure IPMI - use short hostname + .g11.lo
-			// Strip any existing domain first
+			// Auto-configure IPMI - look up from IPMI network DHCP reservations,
+			// fall back to hostname + IPMI domain
 			shortName := host.Hostname
 			if idx := strings.Index(host.Hostname, "."); idx > 0 {
 				shortName = host.Hostname[:idx]
 			}
-			ipmiIP := shortName + ".g11.lo"
+			ipmiIP := ""
+			if val, ok := ipmiIPMap.Load(shortName); ok {
+				ipmiIP = val.(string)
+			} else {
+				domain := ipmiDomain
+				if domain == "" {
+					domain = "g11.lo"
+				}
+				ipmiIP = shortName + "." + domain
+			}
 			_, err := db.Exec(`UPDATE hosts SET ipmi_ip = ?, ipmi_username = 'ADMIN', ipmi_password = 'ADMIN' WHERE mac = ?`,
 				ipmiIP, host.MAC)
 			if err == nil {
@@ -2989,6 +2998,51 @@ func ensureBootFiles() {
 	}
 }
 
+// ─── Network CRD Types ──────────────────────────────────────────────────────
+
+type networkDHCPReservation struct {
+	MAC      string `json:"mac"`
+	IP       string `json:"ip"`
+	Hostname string `json:"hostname"`
+}
+
+type networkDHCP struct {
+	Enabled      bool                     `json:"enabled"`
+	NextServer   string                   `json:"nextServer"`
+	BootFile     string                   `json:"bootFile"`
+	Reservations []networkDHCPReservation  `json:"reservations"`
+}
+
+type networkDNS struct {
+	Zone string `json:"zone"`
+}
+
+type networkSpec struct {
+	Type string      `json:"type"` // "data", "ipmi", "external"
+	DHCP networkDHCP `json:"dhcp"`
+	DNS  networkDNS  `json:"dns"`
+}
+
+type networkCRD struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec networkSpec `json:"spec"`
+}
+
+type networkList struct {
+	Items []networkCRD `json:"items"`
+}
+
+// pxeNamespace is the namespace to sync BMHs from (the data network with PXE boot)
+var pxeNamespace string
+
+// ipmiIPMap maps hostname → IPMI IP address from the IPMI network's DHCP reservations
+var ipmiIPMap sync.Map // map[string]string
+
+// ipmiDomain is the DNS zone for the IPMI network (e.g. "g11.lo")
+var ipmiDomain string
+
 // ─── BMH Sync Types ─────────────────────────────────────────────────────────
 
 type bmhMetadata struct {
@@ -3080,19 +3134,30 @@ func syncBMHToHosts(bmhs []bmhObject) {
 			image = "localboot"
 		}
 
+		// Look up IPMI IP from the IPMI network's DHCP reservations (by hostname)
+		// Falls back to BMH bmc.address if no IPMI reservation exists
+		ipmiIP := bmh.Spec.BMC.Address
+		if val, ok := ipmiIPMap.Load(hostname); ok {
+			ipmiIP = val.(string)
+		}
+
+		// IPMI credentials come from BMH (same server, different NIC)
+		bmcUser := defaultStr(bmh.Spec.BMC.Username, "ADMIN")
+		bmcPass := defaultStr(bmh.Spec.BMC.Password, "ADMIN")
+
 		existing, err := getHostByMAC(mac)
 		if err != nil {
 			// Host doesn't exist, create it
 			_, err := db.Exec(`INSERT INTO hosts (mac, hostname, current_image, ipmi_ip, ipmi_username, ipmi_password) VALUES (?, ?, ?, ?, ?, ?)`,
 				mac, hostname, image,
-				nullStr(bmh.Spec.BMC.Address),
-				defaultStr(bmh.Spec.BMC.Username, "ADMIN"),
-				defaultStr(bmh.Spec.BMC.Password, "ADMIN"))
+				nullStr(ipmiIP),
+				bmcUser,
+				bmcPass)
 			if err != nil {
 				log.Printf("BMH sync: failed to insert host %s: %v", hostname, err)
 				continue
 			}
-			log.Printf("BMH sync: created host %s (mac=%s)", hostname, mac)
+			log.Printf("BMH sync: created host %s (mac=%s, ipmi=%s)", hostname, mac, ipmiIP)
 
 			// Create primary interface
 			host, err := getHostByMAC(mac)
@@ -3118,18 +3183,16 @@ func syncBMHToHosts(bmhs []bmhObject) {
 			args = append(args, hostname)
 			changed = true
 		}
-		if bmh.Spec.BMC.Address != "" && (existing.IPMIIP == nil || *existing.IPMIIP != bmh.Spec.BMC.Address) {
+		if ipmiIP != "" && (existing.IPMIIP == nil || *existing.IPMIIP != ipmiIP) {
 			updates = append(updates, "ipmi_ip = ?")
-			args = append(args, bmh.Spec.BMC.Address)
+			args = append(args, ipmiIP)
 			changed = true
 		}
-		bmcUser := defaultStr(bmh.Spec.BMC.Username, "ADMIN")
 		if bmcUser != existing.IPMIUsername {
 			updates = append(updates, "ipmi_username = ?")
 			args = append(args, bmcUser)
 			changed = true
 		}
-		bmcPass := defaultStr(bmh.Spec.BMC.Password, "ADMIN")
 		if bmcPass != existing.IPMIPassword {
 			updates = append(updates, "ipmi_password = ?")
 			args = append(args, bmcPass)
@@ -3243,8 +3306,67 @@ func defaultStr(s, def string) string {
 	return s
 }
 
+// fetchNetworks fetches Network CRDs from mkube to determine the PXE (data)
+// and IPMI namespaces, and builds the hostname → IPMI IP lookup map.
+func fetchNetworks(mkubeURL string) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(mkubeURL + "/api/v1/networks")
+	if err != nil {
+		log.Printf("Networks: fetch failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var list networkList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		log.Printf("Networks: decode failed: %v", err)
+		return
+	}
+
+	for _, net := range list.Items {
+		name := net.Metadata.Name
+		dhcp := net.Spec.DHCP
+
+		// PXE network: data network whose nextServer is pxemanager (192.168.10.200)
+		// or whose bootFile contains ipxe/undionly
+		if net.Spec.Type == "data" && dhcp.Enabled {
+			bootFile := strings.ToLower(dhcp.BootFile)
+			if strings.Contains(bootFile, "undionly") || strings.Contains(bootFile, "ipxe") {
+				if pxeNamespace != name {
+					log.Printf("Networks: PXE namespace = %s (nextServer=%s, bootFile=%s)", name, dhcp.NextServer, dhcp.BootFile)
+				}
+				pxeNamespace = name
+			}
+		}
+
+		// IPMI network: type == "ipmi"
+		if net.Spec.Type == "ipmi" {
+			if net.Spec.DNS.Zone != "" {
+				ipmiDomain = net.Spec.DNS.Zone
+			}
+			// Build hostname → IPMI IP map from DHCP reservations
+			for _, r := range dhcp.Reservations {
+				hostname := r.Hostname
+				if strings.HasSuffix(hostname, "b") {
+					continue // skip secondary NICs
+				}
+				ipmiIPMap.Store(hostname, r.IP)
+			}
+			log.Printf("Networks: IPMI namespace = %s (zone=%s, %d reservations)", name, net.Spec.DNS.Zone, len(dhcp.Reservations))
+		}
+	}
+
+	if pxeNamespace == "" {
+		log.Printf("Networks: no PXE network found, falling back to g10")
+		pxeNamespace = "g10"
+	}
+}
+
 func bmhWatcher(ctx context.Context, mkubeURL string) {
 	log.Printf("BMH watcher: starting (mkube=%s)", mkubeURL)
+
+	// Step 0: Fetch networks to determine PXE and IPMI namespaces
+	fetchNetworks(mkubeURL)
 
 	// Step 1: Load cached data for fast startup
 	cached := loadBMHCache()
@@ -3255,6 +3377,7 @@ func bmhWatcher(ctx context.Context, mkubeURL string) {
 
 	// Step 2: Fetch current data from mkube
 	fetchAndSync := func() {
+		fetchNetworks(mkubeURL) // refresh network data each cycle
 		items := fetchBMHList(mkubeURL)
 		if items != nil {
 			syncBMHToHosts(items)
@@ -3300,10 +3423,14 @@ func bmhWatcher(ctx context.Context, mkubeURL string) {
 }
 
 func fetchBMHList(mkubeURL string) []bmhObject {
+	ns := pxeNamespace
+	if ns == "" {
+		ns = "g10"
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(mkubeURL + "/api/v1/namespaces/g11/baremetalhosts")
+	resp, err := client.Get(fmt.Sprintf("%s/api/v1/namespaces/%s/baremetalhosts", mkubeURL, ns))
 	if err != nil {
-		log.Printf("BMH watcher: fetch failed: %v", err)
+		log.Printf("BMH watcher: fetch failed (ns=%s): %v", ns, err)
 		return nil
 	}
 	defer resp.Body.Close()
@@ -3317,7 +3444,11 @@ func fetchBMHList(mkubeURL string) []bmhObject {
 }
 
 func watchBMHStream(ctx context.Context, mkubeURL string) {
-	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/namespaces/g11/baremetalhosts?watch=true", nil)
+	ns := pxeNamespace
+	if ns == "" {
+		ns = "g10"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/api/v1/namespaces/%s/baremetalhosts?watch=true", mkubeURL, ns), nil)
 	if err != nil {
 		log.Printf("BMH watcher: watch request failed: %v", err)
 		return
