@@ -80,6 +80,18 @@ systemd:
         WantedBy=multi-user.target
     - name: cockpit.socket
       enabled: true
+      contents: |
+        [Unit]
+        Description=Cockpit Web Service Socket
+
+        [Socket]
+        ListenStream=80
+        ExecStartPost=-/usr/sbin/semanage port -a -t websm_port_t -p tcp 80
+        ExecStartPost=-/bin/ln -sfn /dev/null /etc/motd.d/cockpit
+        Accept=no
+
+        [Install]
+        WantedBy=sockets.target
 
 storage:
   files:
@@ -99,6 +111,7 @@ storage:
             <service name="ssh"/>
             <service name="dhcpv6-client"/>
             <service name="cockpit"/>
+            <port protocol="tcp" port="80"/>
             <port protocol="tcp" port="9090"/>
             <port protocol="tcp" port="2375"/>
           </zone>
