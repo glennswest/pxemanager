@@ -681,18 +681,9 @@ func ipmiPowerOn(host *Host) error {
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerUp)
 	if err == nil {
 		logActivity("info", "ipmi", host, fmt.Sprintf("Power on command sent (%s)", bootMsg))
+		// Reconnect SOL session after power on
 		if host.Hostname != "" {
 			go func() {
-				// Only rotate logs for localboot — PXE boots rotate in the iPXE handler
-				if imageName == "localboot" {
-					label := fmt.Sprintf("disk-%s", time.Now().Format("20060102-150405"))
-					if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-						logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
-					} else {
-						logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-					}
-				}
-				// Reconnect SOL session after power on
 				time.Sleep(15 * time.Second)
 				if err := reconnectConsole(host.Hostname); err != nil {
 					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
@@ -741,18 +732,9 @@ func ipmiRestart(host *Host) error {
 	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerCycle)
 	if err == nil {
 		logActivity("info", "ipmi", host, fmt.Sprintf("Power cycle command sent (%s)", bootMsg))
+		// Reconnect SOL session after power cycle
 		if host.Hostname != "" {
 			go func() {
-				// Only rotate logs for localboot — PXE boots rotate in the iPXE handler
-				if imageName == "localboot" {
-					label := fmt.Sprintf("disk-%s", time.Now().Format("20060102-150405"))
-					if err := rotateConsoleLogs(host.Hostname, label); err != nil {
-						logActivity("warn", "console", host, fmt.Sprintf("Failed to rotate console logs: %v", err))
-					} else {
-						logActivity("info", "console", host, fmt.Sprintf("Started new console log: %s", label))
-					}
-				}
-				// Reconnect SOL session after power cycle
 				time.Sleep(15 * time.Second)
 				if err := reconnectConsole(host.Hostname); err != nil {
 					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
