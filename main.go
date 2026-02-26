@@ -1,8 +1,10 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"database/sql"
@@ -2935,61 +2937,243 @@ func handleRedfishPower(w http.ResponseWriter, r *http.Request, hostname string)
 
 const defaultsDir = "/opt/pxemanager/defaults"
 const tftpbootDir = "/tftpboot"
+const defaultRegistryURL = "http://registry.gt.lo:5000"
+const dataImageRepo = "pxemanager-data"
+const dataImageTag = "edge"
+const digestFile = ".data-digest"
 
-// ensureBootFiles copies default PXE boot files from the image defaults
-// directory to /tftpboot, replacing any that differ from the baked-in version.
-// Uses size comparison first to avoid expensive hashing of large files (rootfs ~900MB).
+// dataFiles are the large boot files stored in the pxemanager-data image
+var dataFiles = []string{
+	"vmlinuz",
+	"initramfs",
+	"fedora-vmlinuz",
+	"fedora-initrd.img",
+	"coreos-kernel",
+	"coreos-initramfs",
+	"coreos-rootfs.img",
+}
+
+// ensureBootFiles copies small config files from /opt/pxemanager/defaults to
+// /tftpboot, then pulls any missing large boot files from the pxemanager-data
+// image in the container registry.
 func ensureBootFiles() {
 	os.MkdirAll(tftpbootDir, 0755)
 
+	// Step 1: Copy small files from defaults dir (baked into app image)
 	entries, err := os.ReadDir(defaultsDir)
 	if err != nil {
 		log.Printf("Boot files: defaults dir not available: %v", err)
+	} else {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			src := filepath.Join(defaultsDir, entry.Name())
+			dst := filepath.Join(tftpbootDir, entry.Name())
+
+			srcInfo, err := os.Stat(src)
+			if err != nil {
+				log.Printf("Boot files: failed to stat %s: %v", src, err)
+				continue
+			}
+
+			if dstInfo, err := os.Stat(dst); err == nil {
+				if srcInfo.Size() == dstInfo.Size() {
+					continue
+				}
+				log.Printf("Boot files: %s changed (size %d -> %d), replacing", entry.Name(), dstInfo.Size(), srcInfo.Size())
+			}
+
+			srcFile, err := os.Open(src)
+			if err != nil {
+				log.Printf("Boot files: failed to open %s: %v", src, err)
+				continue
+			}
+			dstFile, err := os.Create(dst)
+			if err != nil {
+				srcFile.Close()
+				log.Printf("Boot files: failed to create %s: %v", dst, err)
+				continue
+			}
+			n, err := io.Copy(dstFile, srcFile)
+			srcFile.Close()
+			dstFile.Close()
+			if err != nil {
+				log.Printf("Boot files: failed to copy %s: %v", dst, err)
+				continue
+			}
+			log.Printf("Boot files: installed %s (%d MB)", entry.Name(), n/1024/1024)
+		}
+	}
+
+	// Step 2: Check which large files are missing from /tftpboot
+	var missing []string
+	for _, f := range dataFiles {
+		dst := filepath.Join(tftpbootDir, f)
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			missing = append(missing, f)
+		}
+	}
+	if len(missing) == 0 {
+		log.Printf("Boot files: all data files present")
+		return
+	}
+	log.Printf("Boot files: missing %d data files: %v", len(missing), missing)
+
+	// Step 3: Pull from registry
+	pullDataFiles(missing)
+}
+
+// pullDataFiles fetches missing large boot files from the pxemanager-data
+// image in the container registry using the Docker Registry HTTP API v2.
+func pullDataFiles(missing []string) {
+	registryURL := os.Getenv("REGISTRY_URL")
+	if registryURL == "" {
+		registryURL = defaultRegistryURL
+	}
+	registryURL = strings.TrimRight(registryURL, "/")
+
+	// Get manifest to find the layer digest
+	manifestURL := fmt.Sprintf("%s/v2/%s/manifests/%s", registryURL, dataImageRepo, dataImageTag)
+	req, err := http.NewRequest("GET", manifestURL, nil)
+	if err != nil {
+		log.Printf("Boot files: failed to create manifest request: %v", err)
+		return
+	}
+	// Accept Docker manifest v2 schema 2
+	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Boot files: failed to fetch manifest from %s: %v", manifestURL, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Boot files: registry returned %d for manifest", resp.StatusCode)
 		return
 	}
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		src := filepath.Join(defaultsDir, entry.Name())
-		dst := filepath.Join(tftpbootDir, entry.Name())
-
-		srcInfo, err := os.Stat(src)
-		if err != nil {
-			log.Printf("Boot files: failed to stat %s: %v", src, err)
-			continue
-		}
-
-		// Quick check: if destination exists and has same size, skip it
-		if dstInfo, err := os.Stat(dst); err == nil {
-			if srcInfo.Size() == dstInfo.Size() {
-				continue // same size, assume unchanged
-			}
-			log.Printf("Boot files: %s changed (size %d -> %d), replacing", entry.Name(), dstInfo.Size(), srcInfo.Size())
-		}
-
-		// Copy file using streaming (not ReadFile) to avoid loading large files into memory
-		srcFile, err := os.Open(src)
-		if err != nil {
-			log.Printf("Boot files: failed to open %s: %v", src, err)
-			continue
-		}
-		dstFile, err := os.Create(dst)
-		if err != nil {
-			srcFile.Close()
-			log.Printf("Boot files: failed to create %s: %v", dst, err)
-			continue
-		}
-		n, err := io.Copy(dstFile, srcFile)
-		srcFile.Close()
-		dstFile.Close()
-		if err != nil {
-			log.Printf("Boot files: failed to copy %s: %v", dst, err)
-			continue
-		}
-		log.Printf("Boot files: installed %s (%d MB)", entry.Name(), n/1024/1024)
+	var manifest struct {
+		Config struct {
+			Digest string `json:"digest"`
+		} `json:"config"`
+		Layers []struct {
+			Digest    string `json:"digest"`
+			Size      int64  `json:"size"`
+			MediaType string `json:"mediaType"`
+		} `json:"layers"`
 	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Boot files: failed to read manifest: %v", err)
+		return
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		log.Printf("Boot files: failed to parse manifest: %v", err)
+		return
+	}
+
+	// Check if digest changed since last pull
+	currentDigest := resp.Header.Get("Docker-Content-Digest")
+	if currentDigest == "" && len(manifest.Layers) > 0 {
+		currentDigest = manifest.Layers[0].Digest
+	}
+	savedDigest, _ := os.ReadFile(filepath.Join(tftpbootDir, digestFile))
+	if string(savedDigest) == currentDigest && currentDigest != "" {
+		log.Printf("Boot files: data image digest unchanged, skipping pull")
+		return
+	}
+
+	// Build set of missing files for quick lookup
+	missingSet := make(map[string]bool)
+	for _, f := range missing {
+		missingSet[f] = true
+	}
+
+	// Pull each layer and extract data files
+	for i, layer := range manifest.Layers {
+		log.Printf("Boot files: pulling layer %d/%d (%s, %d MB)", i+1, len(manifest.Layers), layer.Digest[:19], layer.Size/1024/1024)
+
+		blobURL := fmt.Sprintf("%s/v2/%s/blobs/%s", registryURL, dataImageRepo, layer.Digest)
+		blobResp, err := http.Get(blobURL)
+		if err != nil {
+			log.Printf("Boot files: failed to fetch blob %s: %v", layer.Digest[:19], err)
+			return
+		}
+		if blobResp.StatusCode != http.StatusOK {
+			blobResp.Body.Close()
+			log.Printf("Boot files: registry returned %d for blob %s", blobResp.StatusCode, layer.Digest[:19])
+			return
+		}
+
+		err = extractDataLayer(blobResp.Body, missingSet)
+		blobResp.Body.Close()
+		if err != nil {
+			log.Printf("Boot files: failed to extract layer: %v", err)
+			return
+		}
+
+		// If all missing files found, stop pulling layers
+		if len(missingSet) == 0 {
+			break
+		}
+	}
+
+	// Save digest for next startup
+	if currentDigest != "" {
+		os.WriteFile(filepath.Join(tftpbootDir, digestFile), []byte(currentDigest), 0644)
+		log.Printf("Boot files: saved data digest %s", currentDigest[:19])
+	}
+}
+
+// extractDataLayer reads a gzip-compressed tar layer and extracts files from
+// /data/ into /tftpboot/. Only extracts files in the missingSet and removes
+// them from the set as they are extracted.
+func extractDataLayer(r io.Reader, missingSet map[string]bool) error {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return fmt.Errorf("gzip open: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar read: %w", err)
+		}
+
+		// Files are at /data/<filename> in the layer
+		name := strings.TrimPrefix(hdr.Name, "data/")
+		name = strings.TrimPrefix(name, "./data/")
+		if name == hdr.Name || name == "" || hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		if !missingSet[name] {
+			continue
+		}
+
+		dst := filepath.Join(tftpbootDir, name)
+		f, err := os.Create(dst)
+		if err != nil {
+			return fmt.Errorf("create %s: %w", dst, err)
+		}
+		n, err := io.Copy(f, tr)
+		f.Close()
+		if err != nil {
+			return fmt.Errorf("write %s: %w", dst, err)
+		}
+		log.Printf("Boot files: extracted %s (%d MB)", name, n/1024/1024)
+		delete(missingSet, name)
+	}
+	return nil
 }
 
 // ─── Network CRD Types ──────────────────────────────────────────────────────

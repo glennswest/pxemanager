@@ -96,18 +96,27 @@ curl -X POST http://network.gw.lo/api/scan/switch
 ### Build
 
 ```bash
-# Local build
-go build -o pxemanager .
+# Build app image only (~13 MB, fast)
+./build.sh
 
-# Cross-compile for ARM64 (MikroTik)
-GOOS=linux GOARCH=arm64 go build -o pxemanager-arm64 .
+# Build data image only (~1.3 GB, large boot files — only when kernels/rootfs change)
+./build.sh --data
+
+# Build both
+./build.sh --all
 ```
 
 ### Deploy
 
 ```bash
-# Deploy to MikroTik container
+# Deploy app image (fast, code-only changes)
 ./deploy.sh
+
+# Deploy data image (large boot files changed)
+./deploy.sh --data
+
+# Deploy both
+./deploy.sh --all
 ```
 
 ### Configuration
@@ -117,6 +126,7 @@ The application uses environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `80` | HTTP server port |
+| `REGISTRY_URL` | `http://registry.gt.lo:5000` | Container registry for pulling data image |
 
 Database is stored in `pxemanager.db` (SQLite).
 
@@ -141,6 +151,10 @@ Access the web interface at `http://<host>/`
 ```
 pxemanager/
 ├── main.go              # Main application (all handlers)
+├── Dockerfile           # App image (~13 MB) — binary + small configs
+├── Dockerfile.data      # Data image (~1.3 GB) — kernels + rootfs
+├── build.sh             # Build script (--data for data image)
+├── deploy.sh            # Build + push (--data for data image)
 ├── templates/
 │   ├── index.html       # Main page with HTMX
 │   ├── hosts_table.html # Hosts table partial
@@ -148,7 +162,6 @@ pxemanager/
 │   ├── ipmi_table.html  # IPMI config table
 │   ├── activity_log.html# Activity log partial
 │   └── host_detail.html # Host detail modal
-├── deploy.sh            # Build and deploy script
 ├── boot.ipxe            # iPXE boot script
 ├── embed.ipxe           # Embedded iPXE script
 └── undionly-custom.kpxe # Custom iPXE with embedded script
@@ -560,19 +573,35 @@ curl -X POST 'http://pxe.g10.lo/api/host/set-cycle?mac=AA:BB:CC:DD:EE:FF' \
   -d '["baremetalservices","coreos-builder"]'
 ```
 
-### Baking Files into the Container Image
+### Split Image Architecture
 
-For production deployments, bake boot files into the container so they survive restarts:
+The project uses two container images to keep code-only deploys fast:
 
-1. Add files to the project directory
-2. Add `COPY` lines to `Dockerfile`:
-   ```dockerfile
-   COPY my-kernel /opt/pxemanager/defaults/my-kernel
-   COPY my-initrd /opt/pxemanager/defaults/my-initrd
-   COPY my-config.ign /opt/pxemanager/defaults/my-config.ign
-   ```
-3. Files in `/opt/pxemanager/defaults/` are automatically copied to `/tftpboot/` on startup
-4. SHA256 checksums detect changes — updated files replace old versions automatically
+| Image | Size | Contents | Rebuild frequency |
+|-------|------|----------|-------------------|
+| `pxemanager:edge` | ~13 MB | Go binary, iPXE bootloaders, configs, kickstarts | Every code change |
+| `pxemanager-data:edge` | ~1.3 GB | Kernels, initramfs, CoreOS rootfs | Only when boot files change |
+
+On startup, small config files are copied from `/opt/pxemanager/defaults/` (baked into app image). Large boot files are pulled on-demand from the `pxemanager-data` image in the container registry via the Docker Registry HTTP API v2.
+
+**Data pull behavior:**
+- Checks which large files are missing from `/tftpboot/`
+- Pulls layer blobs from registry, extracts only missing files
+- Saves manifest digest to `.data-digest` — skips pull if unchanged on next restart
+- Falls back gracefully if registry is unreachable (existing files keep working)
+
+### Adding Custom Boot Files
+
+For small configs (ignition, kickstart):
+1. Add file to the project directory
+2. Add `COPY` line to `Dockerfile` → `/opt/pxemanager/defaults/`
+3. Rebuild app image: `./deploy.sh`
+
+For large files (kernels, initrd, rootfs):
+1. Add file to the project directory
+2. Add `COPY` line to `Dockerfile.data` → `/data/`
+3. Add filename to `dataFiles` list in `main.go`
+4. Rebuild data image: `./deploy.sh --data`
 
 ## Development
 
