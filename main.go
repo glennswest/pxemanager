@@ -690,10 +690,17 @@ func ipmiPowerOn(host *Host) error {
 	if host.NextImage != nil && *host.NextImage != "" {
 		imageName = *host.NextImage
 	}
-	bootMsg := "PXE boot"
+	// Check BMH image as source of truth
+	if bmhImage := getHostBMHImage(host.Hostname); bmhImage != "" {
+		imageName = bmhImage
+	}
+	bootMsg := fmt.Sprintf("PXE boot → %s", imageName)
 	if imageName == "localboot" {
 		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, false)
 		bootMsg = "local boot"
+	} else if imageName == "" {
+		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+		bootMsg = "PXE boot"
 	} else {
 		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
 	}
@@ -741,10 +748,17 @@ func ipmiRestart(host *Host) error {
 	if host.NextImage != nil && *host.NextImage != "" {
 		imageName = *host.NextImage
 	}
-	bootMsg := "PXE boot"
+	// Check BMH image as source of truth
+	if bmhImage := getHostBMHImage(host.Hostname); bmhImage != "" {
+		imageName = bmhImage
+	}
+	bootMsg := fmt.Sprintf("PXE boot → %s", imageName)
 	if imageName == "localboot" {
 		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, false)
 		bootMsg = "local boot"
+	} else if imageName == "" {
+		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
+		bootMsg = "PXE boot"
 	} else {
 		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
 	}
@@ -3491,6 +3505,15 @@ func getISCSICdroms() []ISCSICdromInfo {
 }
 
 // getHostBootConfigRef returns the bootConfigRef for a host from bmhMap
+func getHostBMHImage(hostname string) string {
+	val, ok := bmhMap.Load(hostname)
+	if !ok {
+		return ""
+	}
+	bmh := val.(bmhObject)
+	return bmh.Spec.Image
+}
+
 func getHostBootConfigRef(hostname string) string {
 	val, ok := bmhMap.Load(hostname)
 	if !ok {
