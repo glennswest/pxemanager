@@ -2,3 +2,4 @@ FROM scratch
 COPY vmlinuz initramfs /data/
 COPY fedora-vmlinuz fedora-initrd.img /data/
 COPY coreos-kernel coreos-initramfs coreos-rootfs.img /data/
+COPY stormbase.iso /data/

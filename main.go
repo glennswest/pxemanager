@@ -291,6 +291,7 @@ func initDB() error {
 		{Name: "fedora43", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 		{Name: "fedora43-builder", Kernel: "fedora-vmlinuz", Initrd: "fedora-initrd.img", Append: "inst.stage2=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Server/x86_64/os/ inst.ks=http://192.168.10.200/files/fedora-builder-ks.cfg ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
 		{Name: "coreos-builder", Kernel: "coreos-kernel", Initrd: "coreos-initramfs", Append: "ignition.config.url=http://192.168.10.200/files/live-builder.ign ignition.firstboot ignition.platform.id=metal coreos.live.rootfs_url=http://192.168.10.200/files/coreos-rootfs.img ip=dhcp console=tty0 console=ttyS0,115200n8 console=ttyS1,115200n8", Type: "linux"},
+		{Name: "stormbase", Kernel: "memdisk", Initrd: "stormbase.iso", Append: "iso raw", Type: "memdisk"},
 	}
 
 	for _, img := range defaultImages {
@@ -2951,6 +2952,7 @@ var dataFiles = []string{
 	"coreos-kernel",
 	"coreos-initramfs",
 	"coreos-rootfs.img",
+	"stormbase.iso",
 }
 
 // ensureBootFiles copies small config files from /opt/pxemanager/defaults to

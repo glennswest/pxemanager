@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.11.1] - 2026-02-27
+
+### Added
+- `stormbase` default image — boots stormbase ISO via memdisk
+- `stormbase.iso` added to data image manifest
+
 ## [0.11.0] - 2026-02-26
 
 ### Added
