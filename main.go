@@ -40,6 +40,22 @@ var bmhMap sync.Map // map[string]bmhObject
 // activeMkubeURL is the mkube API URL used for BMH operations
 var activeMkubeURL string
 
+// PowerTransition tracks an in-progress power state change for a host.
+type PowerTransition struct {
+	Hostname    string
+	Action      string // "power_on", "power_off", "restart"
+	DesiredOn   bool   // true for power_on/restart, false for power_off
+	StartedAt   time.Time
+	Attempt     int
+	MaxAttempts int
+	Done        bool
+	Failed      bool
+	mu          sync.Mutex
+}
+
+// powerTransitions tracks active power transitions: hostname → *PowerTransition
+var powerTransitions sync.Map
+
 //go:embed templates/*
 var templatesFS embed.FS
 
@@ -791,6 +807,211 @@ func ipmiSetBootDisk(host *Host) error {
 		logActivity("info", "ipmi", host, "Set boot device to disk")
 	}
 	return err
+}
+
+// startPowerTransition sends an IPMI power command and spawns a background
+// goroutine to verify the state actually changed, retrying up to 3 times.
+func startPowerTransition(host *Host, action string) error {
+	desiredOn := action != "power_off"
+
+	// Cancel any existing transition for this host
+	powerTransitions.Delete(host.Hostname)
+
+	// Send the initial IPMI command synchronously (catches auth/network errors)
+	var sendErr error
+	switch action {
+	case "power_on":
+		sendErr = ipmiPowerOn(host)
+	case "power_off":
+		sendErr = ipmiPowerOff(host)
+	case "restart":
+		sendErr = ipmiRestart(host)
+	}
+	if sendErr != nil {
+		return sendErr
+	}
+
+	t := &PowerTransition{
+		Hostname:    host.Hostname,
+		Action:      action,
+		DesiredOn:   desiredOn,
+		StartedAt:   time.Now(),
+		Attempt:     1,
+		MaxAttempts: 3,
+	}
+	powerTransitions.Store(host.Hostname, t)
+
+	go verifyPowerTransition(host.Hostname, t)
+
+	return nil
+}
+
+func verifyPowerTransition(hostname string, t *PowerTransition) {
+	const (
+		initialDelay  = 5 * time.Second
+		pollInterval  = 3 * time.Second
+		maxWaitPerTry = 30 * time.Second
+		totalTimeout  = 120 * time.Second
+	)
+
+	deadline := time.Now().Add(totalTimeout)
+	time.Sleep(initialDelay)
+
+	for {
+		// Check if this transition was superseded
+		val, ok := powerTransitions.Load(hostname)
+		if !ok || val.(*PowerTransition) != t {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.mu.Lock()
+			t.Done = true
+			t.Failed = true
+			t.mu.Unlock()
+			logTransitionResult(hostname, t, "timed out")
+			go cleanupTransition(hostname, 30*time.Second)
+			return
+		}
+
+		host, err := getHostByHostname(hostname)
+		if err != nil {
+			t.mu.Lock()
+			t.Done = true
+			t.Failed = true
+			t.mu.Unlock()
+			go cleanupTransition(hostname, 30*time.Second)
+			return
+		}
+
+		status, err := ipmiPowerStatus(host)
+		if err != nil {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		isDesired := (t.DesiredOn && status == "on") || (!t.DesiredOn && status == "off")
+		// For restart, don't count "on" as success too early (might not have cycled yet)
+		if t.Action == "restart" && status == "on" && time.Since(t.StartedAt) < 10*time.Second {
+			isDesired = false
+		}
+
+		if isDesired {
+			t.mu.Lock()
+			t.Done = true
+			t.Failed = false
+			t.mu.Unlock()
+			logTransitionResult(hostname, t, "confirmed")
+			go updateBMHPowerStatus(hostname, t.DesiredOn)
+			go cleanupTransition(hostname, 5*time.Second)
+			return
+		}
+
+		// Check if this attempt has waited long enough
+		attemptStart := t.StartedAt.Add(time.Duration(t.Attempt-1) * maxWaitPerTry)
+		if time.Since(attemptStart) > maxWaitPerTry {
+			t.mu.Lock()
+			if t.Attempt >= t.MaxAttempts {
+				t.Done = true
+				t.Failed = true
+				t.mu.Unlock()
+				logTransitionResult(hostname, t, "failed after 3 attempts")
+				go cleanupTransition(hostname, 30*time.Second)
+				return
+			}
+			t.Attempt++
+			attempt := t.Attempt
+			t.mu.Unlock()
+
+			logActivity("warn", "ipmi", host, fmt.Sprintf(
+				"Power %s not confirmed, retrying (attempt %d/3)", t.Action, attempt))
+
+			switch t.Action {
+			case "power_on":
+				ipmiPowerOn(host)
+			case "power_off":
+				ipmiPowerOff(host)
+			case "restart":
+				ipmiRestart(host)
+			}
+
+			time.Sleep(initialDelay)
+			continue
+		}
+
+		time.Sleep(pollInterval)
+	}
+}
+
+func logTransitionResult(hostname string, t *PowerTransition, result string) {
+	host, err := getHostByHostname(hostname)
+	if err != nil {
+		log.Printf("IPMI transition %s for %s: %s (attempt %d)", t.Action, hostname, result, t.Attempt)
+		return
+	}
+	level := "info"
+	if t.Failed {
+		level = "error"
+	}
+	logActivity(level, "ipmi", host, fmt.Sprintf(
+		"Power %s %s (attempt %d/%d, took %s)",
+		t.Action, result, t.Attempt, t.MaxAttempts, time.Since(t.StartedAt).Round(time.Second)))
+}
+
+func cleanupTransition(hostname string, delay time.Duration) {
+	time.Sleep(delay)
+	powerTransitions.Delete(hostname)
+}
+
+func getTransitionState(hostname string) string {
+	val, ok := powerTransitions.Load(hostname)
+	if !ok {
+		return ""
+	}
+	t := val.(*PowerTransition)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.Done && t.Failed {
+		return "failed"
+	}
+	if t.Done {
+		return ""
+	}
+
+	switch t.Action {
+	case "power_on":
+		return "powering_on"
+	case "power_off":
+		return "powering_off"
+	case "restart":
+		return "restarting"
+	}
+	return ""
+}
+
+func transitionLabel(state string) string {
+	switch state {
+	case "powering_on":
+		return `<span class="spinner"></span> Powering On`
+	case "powering_off":
+		return `<span class="spinner"></span> Powering Off`
+	case "restarting":
+		return `<span class="spinner"></span> Restarting`
+	case "failed":
+		return `! Failed`
+	}
+	return state
+}
+
+func transitionCSSClass(state string) string {
+	switch state {
+	case "powering_on", "powering_off", "restarting":
+		return "power-transitioning"
+	case "failed":
+		return "power-failed"
+	}
+	return "power-unknown"
 }
 
 // Console server integration
@@ -1762,24 +1983,11 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 	clearDellSessions(host)
 
 	switch action {
-	case "restart":
-		if err := ipmiRestart(host); err != nil {
+	case "restart", "power_on", "power_off":
+		if err := startPowerTransition(host, action); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		go updateBMHPowerStatus(host.Hostname, true)
-	case "power_on":
-		if err := ipmiPowerOn(host); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		go updateBMHPowerStatus(host.Hostname, true)
-	case "power_off":
-		if err := ipmiPowerOff(host); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		go updateBMHPowerStatus(host.Hostname, false)
 	case "set_boot":
 		device := r.URL.Query().Get("device")
 		switch device {
@@ -1815,28 +2023,47 @@ func handleAPIHostIPMI(w http.ResponseWriter, r *http.Request) {
 
 func handleAPIHostIPMIStatus(w http.ResponseWriter, r *http.Request) {
 	hostname := r.URL.Query().Get("host")
+	w.Header().Set("Content-Type", "text/html")
+
 	if hostname == "" {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "-")
+		fmt.Fprint(w, `<span class="power-badge power-unknown">-</span>`)
 		return
 	}
 
 	host, err := getHostByHostname(hostname)
-	if err != nil {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "-")
+	if err != nil || host.IPMIIP == nil || *host.IPMIIP == "" {
+		fmt.Fprint(w, `<span class="power-badge power-unknown">-</span>`)
 		return
 	}
 
-	if host.IPMIIP == nil || *host.IPMIIP == "" {
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "-")
+	// Check for active transition first
+	transState := getTransitionState(hostname)
+
+	if transState != "" {
+		// Transition active — fast poll (every 2s)
+		label := transitionLabel(transState)
+		cssClass := transitionCSSClass(transState)
+		fmt.Fprintf(w,
+			`<span class="power-badge %s" hx-get="/api/host/ipmi/status?host=%s" hx-trigger="every 2s" hx-swap="outerHTML">%s</span>`,
+			cssClass, hostname, label)
 		return
 	}
 
+	// No transition — normal poll (every 30s)
 	status, _ := ipmiPowerStatus(host)
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, status)
+	cssClass := "power-unknown"
+	label := "-"
+	switch status {
+	case "on":
+		cssClass = "power-on"
+		label = "ON"
+	case "off":
+		cssClass = "power-off"
+		label = "OFF"
+	}
+	fmt.Fprintf(w,
+		`<span class="power-badge %s" hx-get="/api/host/ipmi/status?host=%s" hx-trigger="every 30s" hx-swap="outerHTML">%s</span>`,
+		cssClass, hostname, label)
 }
 
 func handleAPIHostIPMITest(w http.ResponseWriter, r *http.Request) {
@@ -2613,38 +2840,18 @@ func handleRedfishSystemAction(w http.ResponseWriter, r *http.Request) {
 	var actionErr error
 	switch body.ResetType {
 	case "On":
-		actionErr = ipmiPowerOn(host)
-		logActivity("info", "redfish", host, "Power on via Redfish API")
-		if actionErr == nil {
-			go updateBMHPowerStatus(host.Hostname, true)
-		}
+		actionErr = startPowerTransition(host, "power_on")
 	case "ForceOff", "GracefulShutdown":
-		actionErr = ipmiPowerOff(host)
-		logActivity("info", "redfish", host, "Power off via Redfish API")
-		if actionErr == nil {
-			go updateBMHPowerStatus(host.Hostname, false)
-		}
+		actionErr = startPowerTransition(host, "power_off")
 	case "ForceRestart", "GracefulRestart":
-		actionErr = ipmiRestart(host)
-		logActivity("info", "redfish", host, "Restart via Redfish API")
-		if actionErr == nil {
-			go updateBMHPowerStatus(host.Hostname, true)
-		}
+		actionErr = startPowerTransition(host, "restart")
 	case "PushPowerButton":
-		// Toggle power
 		status, _ := ipmiPowerStatus(host)
 		if status == "on" {
-			actionErr = ipmiPowerOff(host)
-			if actionErr == nil {
-				go updateBMHPowerStatus(host.Hostname, false)
-			}
+			actionErr = startPowerTransition(host, "power_off")
 		} else {
-			actionErr = ipmiPowerOn(host)
-			if actionErr == nil {
-				go updateBMHPowerStatus(host.Hostname, true)
-			}
+			actionErr = startPowerTransition(host, "power_on")
 		}
-		logActivity("info", "redfish", host, "Power button via Redfish API")
 	default:
 		http.Error(w, fmt.Sprintf("Unsupported ResetType: %s", body.ResetType), http.StatusBadRequest)
 		return

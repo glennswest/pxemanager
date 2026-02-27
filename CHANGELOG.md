@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.2] - 2026-02-27
+
+### Added
+- Async IPMI power state machine — power commands verified in background with up to 3 retries
+- Color-coded power badges in UI: green ON, red OFF, yellow spinner during transitions, red Failed on error
+- Adaptive UI polling: 2s during power transitions, 30s when stable (self-replacing HTMX pattern)
+- Activity log shows confirmation with attempt count and duration (e.g. "Power power_on confirmed (attempt 1/3, took 15s)")
+
+### Changed
+- Power status endpoint returns HTML badges instead of plain text
+- Redfish API power actions now use the same state machine with verification
+
 ## [0.11.1] - 2026-02-27
 
 ### Added
