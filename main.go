@@ -1641,39 +1641,9 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Boot-local-after: if the BMH has a bootConfigRef, this is an installer — switch to localboot after first boot
-	bmhHasConfig := false
-	if fullHost != nil && fullHost.Hostname != "" {
-		if val, ok := bmhMap.Load(fullHost.Hostname); ok {
-			bmhHasConfig = val.(bmhObject).Spec.BootConfigRef != ""
-		}
-	}
-	if bmhHasConfig && fullHost != nil {
-		// PATCH BMH to localboot so next reboot goes to disk
-		go func() {
-			if err := updateBMHImage(fullHost.Hostname, "localboot"); err != nil {
-				logActivity("warn", "boot", fullHost, fmt.Sprintf("Failed to set BMH to localboot: %v", err))
-			}
-			db.Exec(`UPDATE hosts SET current_image = 'localboot' WHERE id = ?`, host.ID)
-		}()
-
-		// Set persistent IPMI boot device to disk
-		if fullHost.IPMIIP != nil && *fullHost.IPMIIP != "" {
-			go func() {
-				client, err := getIPMIClient(fullHost)
-				if err != nil {
-					logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set boot device to disk: %v", err))
-					return
-				}
-				defer client.Close(context.Background())
-				if err := client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, true); err != nil {
-					logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set persistent boot device to disk: %v", err))
-				} else {
-					logActivity("info", "ipmi", fullHost, "Set persistent boot device to disk")
-				}
-			}()
-		}
-	}
+	// NOTE: boot_local_after is NOT done here — the iPXE script is served before the ISO
+	// even boots. The installer (coreos-installer ignition) should switch the BMH to localboot
+	// after install completes, either via a REST call or by a post-install hook.
 
 	// Rotate console logs when booting a new image
 	if fullHost != nil && fullHost.Hostname != "" {
