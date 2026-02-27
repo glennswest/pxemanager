@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REGISTRY="registry.gt.lo:5000"
+MKUBE_API="http://192.168.200.2:8082"
 REPO="pxemanager"
 
 cd "$SCRIPT_DIR"
@@ -22,6 +23,8 @@ case "${1:-}" in
     --data)
         echo "Pushing data image to $REGISTRY ..."
         podman push --tls-verify=false "$DATA_IMAGE_EDGE"
+        echo "Triggering image redeploy..."
+        curl -s -X POST "$MKUBE_API/api/v1/images/redeploy" || true
         echo ""
         echo "=== Deployed ==="
         echo "  Data image: $DATA_IMAGE_EDGE"
@@ -31,6 +34,8 @@ case "${1:-}" in
         podman push --tls-verify=false "$IMAGE_EDGE"
         echo "Pushing data image to $REGISTRY ..."
         podman push --tls-verify=false "$DATA_IMAGE_EDGE"
+        echo "Triggering image redeploy..."
+        curl -s -X POST "$MKUBE_API/api/v1/images/redeploy" || true
         echo ""
         echo "=== Deployed ==="
         echo "  App image:  $IMAGE_EDGE"
@@ -40,6 +45,8 @@ case "${1:-}" in
     *)
         echo "Pushing app image to $REGISTRY ..."
         podman push --tls-verify=false "$IMAGE_EDGE"
+        echo "Triggering image redeploy..."
+        curl -s -X POST "$MKUBE_API/api/v1/images/redeploy" || true
         echo ""
         echo "=== Deployed ==="
         echo "  Image: $IMAGE_EDGE"
