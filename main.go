@@ -1641,8 +1641,14 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Boot-local-after: ISOs with bootConfigs are installers — switch to localboot after first boot
-	if len(cdrom.Spec.BootConfigs) > 0 && fullHost != nil {
+	// Boot-local-after: if the BMH has a bootConfigRef, this is an installer — switch to localboot after first boot
+	bmhHasConfig := false
+	if fullHost != nil && fullHost.Hostname != "" {
+		if val, ok := bmhMap.Load(fullHost.Hostname); ok {
+			bmhHasConfig = val.(bmhObject).Spec.BootConfigRef != ""
+		}
+	}
+	if bmhHasConfig && fullHost != nil {
 		// PATCH BMH to localboot so next reboot goes to disk
 		go func() {
 			if err := updateBMHImage(fullHost.Hostname, "localboot"); err != nil {
