@@ -365,6 +365,26 @@
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') closeModal();
         });
+
+        // Config dropdown data from iSCSI CDROMs — injected by Go template
+        var cdromConfigs = {};
+        {{range .CDROMs}}
+        cdromConfigs["{{.Name}}"] = [{{range .BootConfigs}}"{{.}}",{{end}}];
+        {{end}}
+
+        // Update config dropdown when ISO changes
+        function updateConfigDropdown(isoSelect) {
+            var row = isoSelect.closest('tr');
+            var configSelect = row.querySelector('.config-select');
+            if (!configSelect) return;
+            var iso = isoSelect.value;
+            var configs = cdromConfigs[iso] || [];
+            var html = '<option value="">(none)</option>';
+            for (var i = 0; i < configs.length; i++) {
+                html += '<option value="' + configs[i] + '">' + configs[i] + '</option>';
+            }
+            configSelect.innerHTML = html;
+        }
     </script>
 </body>
 </html>

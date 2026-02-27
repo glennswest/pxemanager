@@ -4,8 +4,8 @@
         <tr>
             <th>Hostname</th>
             <th>Power</th>
-            <th>Current Image</th>
-            <th>Status</th>
+            <th>ISO</th>
+            <th>Config</th>
             <th>Last Boot</th>
             <th>Actions</th>
         </tr>
@@ -23,17 +23,31 @@
             </td>
             <td>
                 <select hx-post="/api/host?mac={{.MAC}}&action=set_image" hx-swap="none" hx-trigger="change" name="image"
-                        hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')">
+                        hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')"
+                        onchange="updateConfigDropdown(this)">
                     {{$current := .CurrentImage}}
-                    {{range $.Images}}
+                    <option value="localboot" {{if eq $current "localboot"}}selected{{end}}>localboot</option>
+                    {{range $.CDROMs}}
                     <option value="{{.Name}}" {{if eq .Name $current}}selected{{end}}>{{.Name}}</option>
                     {{end}}
                 </select>
             </td>
             <td>
-                {{if .NextImage}}<span class="badge badge-next">Next: {{.NextImage}}</span>
-                {{else if .CycleImages}}<span class="badge badge-cycle">Cycle</span>
-                {{else}}<span style="color:#6bcb77">Ready</span>{{end}}
+                {{$hostname := .Hostname}}
+                {{$configRef := index $.ConfigRefs .Hostname}}
+                {{$currentImage := .CurrentImage}}
+                <select hx-post="/api/host?mac={{.MAC}}&action=set_config" hx-swap="none" hx-trigger="change" name="config"
+                        hx-on::after-request="htmx.trigger(document.body, 'hostsUpdated')"
+                        data-hostname="{{.Hostname}}" class="config-select">
+                    <option value="">(none)</option>
+                    {{range $.CDROMs}}
+                        {{if eq .Name $currentImage}}
+                            {{range .BootConfigs}}
+                            <option value="{{.}}" {{if eq . $configRef}}selected{{end}}>{{.}}</option>
+                            {{end}}
+                        {{end}}
+                    {{end}}
+                </select>
             </td>
             <td class="timestamp">{{if .LastBoot}}{{.LastBoot}}{{else}}-{{end}}</td>
             <td>

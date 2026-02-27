@@ -30,6 +30,7 @@ import (
 const ConsoleServerURL = "http://ipmiserial.g11.lo"
 const NetworkManagerURL = "http://network.gw.lo"
 const DefaultMkubeURL = "http://192.168.200.2:8082"
+const ISCSIPortalIP = "192.168.10.1" // rose.g10.lo — iSCSI portal for g10 clients
 
 // Version is set at build time via -ldflags
 var Version = "dev"
@@ -1597,71 +1598,75 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Determine which image to boot
-	imageName := host.CurrentImage
-
-	// Check for next_image (one-shot override)
-	if host.NextImage != nil && *host.NextImage != "" {
-		imageName = *host.NextImage
-		// Clear next_image after use
-		db.Exec(`UPDATE hosts SET next_image = NULL WHERE id = ?`, host.ID)
-	} else if host.CycleImages != nil && *host.CycleImages != "" {
-		// Check for boot cycle
-		var cycle []string
-		if err := json.Unmarshal([]byte(*host.CycleImages), &cycle); err == nil && len(cycle) > 0 {
-			if host.CycleIndex < len(cycle) {
-				imageName = cycle[host.CycleIndex]
-				// Advance cycle index
-				newIndex := host.CycleIndex + 1
-				if newIndex >= len(cycle) {
-					// Cycle complete, clear it
-					db.Exec(`UPDATE hosts SET cycle_images = NULL, cycle_index = 0 WHERE id = ?`, host.ID)
-				} else {
-					db.Exec(`UPDATE hosts SET cycle_index = ? WHERE id = ?`, newIndex, host.ID)
-				}
-			}
-		}
-	}
-
-	// Get image details
-	var img Image
-	var initrd, appendStr sql.NullString
-	err = db.QueryRow(`SELECT name, kernel, initrd, append, type, erase_boot_drive, erase_all_drives, boot_local_after FROM images WHERE name = ?`, imageName).
-		Scan(&img.Name, &img.Kernel, &initrd, &appendStr, &img.Type, &img.EraseBootDrive, &img.EraseAllDrives, &img.BootLocalAfter)
-	if err != nil {
-		log.Printf("Image %s not found, falling back to baremetalservices", imageName)
-		imageName = "baremetalservices"
-		db.QueryRow(`SELECT name, kernel, initrd, append, type, erase_boot_drive, erase_all_drives, boot_local_after FROM images WHERE name = ?`, imageName).
-			Scan(&img.Name, &img.Kernel, &initrd, &appendStr, &img.Type, &img.EraseBootDrive, &img.EraseAllDrives, &img.BootLocalAfter)
-	}
-	if initrd.Valid {
-		img.Initrd = initrd.String
-	}
-	if appendStr.Valid {
-		img.Append = appendStr.String
-	}
-
-	// Get full host info for IPMI operations (use host.ID since MAC might be an interface)
+	// Get full host info for IPMI operations
 	fullHost, _ := getHostByID(host.ID)
 
-	// Boot-local-after: persistently set IPMI to boot from disk and switch host to localboot
-	// so subsequent restarts (including installer reboots) always boot from disk
-	if img.BootLocalAfter && fullHost != nil && fullHost.IPMIIP != nil && *fullHost.IPMIIP != "" {
-		db.Exec(`UPDATE hosts SET current_image = 'localboot' WHERE id = ?`, host.ID)
+	// Determine boot image from BMH CRD (source of truth is mkube, not SQLite)
+	imageName := ""
+	if host.Hostname != "" {
+		if val, ok := bmhMap.Load(host.Hostname); ok {
+			bmh := val.(bmhObject)
+			imageName = bmh.Spec.Image
+		}
+	}
+	if imageName == "" {
+		imageName = host.CurrentImage // fallback to SQLite for unsynced hosts
+	}
+	if imageName == "" {
+		imageName = "localboot"
+	}
+
+	// localboot = boot from disk
+	if imageName == "localboot" {
+		log.Printf("iPXE boot: MAC=%s hostname=%s image=localboot (exit)", mac, host.Hostname)
+		db.Exec(`UPDATE hosts SET last_boot = CURRENT_TIMESTAMP, boot_count = boot_count + 1 WHERE id = ?`, host.ID)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "#!ipxe\nexit\n")
+		return
+	}
+
+	// Look up iSCSI CDROM by name
+	var cdrom iscsiCdromObject
+	var cdromFound bool
+	if val, ok := iscsiCdromMap.Load(imageName); ok {
+		cdrom = val.(iscsiCdromObject)
+		cdromFound = true
+	}
+
+	if !cdromFound || cdrom.Status.TargetIQN == "" {
+		log.Printf("iPXE boot: MAC=%s hostname=%s image=%s — iSCSI CDROM not found or no IQN, booting local", mac, host.Hostname, imageName)
+		logActivity("warn", "boot", fullHost, fmt.Sprintf("iSCSI CDROM %q not found, booting local", imageName))
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "#!ipxe\nexit\n")
+		return
+	}
+
+	// Boot-local-after: ISOs with bootConfigs are installers — switch to localboot after first boot
+	if len(cdrom.Spec.BootConfigs) > 0 && fullHost != nil {
+		// PATCH BMH to localboot so next reboot goes to disk
 		go func() {
-			client, err := getIPMIClient(fullHost)
-			if err != nil {
-				logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set boot device to disk: %v", err))
-				return
+			if err := updateBMHImage(fullHost.Hostname, "localboot"); err != nil {
+				logActivity("warn", "boot", fullHost, fmt.Sprintf("Failed to set BMH to localboot: %v", err))
 			}
-			defer client.Close(context.Background())
-			// Use persistent=true so disk boot survives multiple reboots (installer reboot, rpm-ostree reboot, etc.)
-			if err := client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, true); err != nil {
-				logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set persistent boot device to disk: %v", err))
-			} else {
-				logActivity("info", "ipmi", fullHost, "Set persistent boot device to disk")
-			}
+			db.Exec(`UPDATE hosts SET current_image = 'localboot' WHERE id = ?`, host.ID)
 		}()
+
+		// Set persistent IPMI boot device to disk
+		if fullHost.IPMIIP != nil && *fullHost.IPMIIP != "" {
+			go func() {
+				client, err := getIPMIClient(fullHost)
+				if err != nil {
+					logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set boot device to disk: %v", err))
+					return
+				}
+				defer client.Close(context.Background())
+				if err := client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForceHardDrive, ipmi.BIOSBootTypeLegacy, true); err != nil {
+					logActivity("warn", "ipmi", fullHost, fmt.Sprintf("Failed to set persistent boot device to disk: %v", err))
+				} else {
+					logActivity("info", "ipmi", fullHost, "Set persistent boot device to disk")
+				}
+			}()
+		}
 	}
 
 	// Rotate console logs when booting a new image
@@ -1676,56 +1681,17 @@ func handleIPXE(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	// Update boot stats (use host.ID since MAC might be an interface)
+	// Update boot stats
 	db.Exec(`UPDATE hosts SET last_boot = CURRENT_TIMESTAMP, boot_count = boot_count + 1 WHERE id = ?`, host.ID)
-
-	// Log boot event
 	db.Exec(`INSERT INTO boot_logs (mac, hostname, image) VALUES (?, ?, ?)`, host.MAC, host.Hostname, imageName)
+	logActivity("info", "boot", fullHost, fmt.Sprintf("Booting iSCSI %s (iqn=%s)", imageName, cdrom.Status.TargetIQN))
+	log.Printf("iPXE boot: MAC=%s hostname=%s image=%s iqn=%s", mac, host.Hostname, imageName, cdrom.Status.TargetIQN)
 
-	// Log to activity log
-	logActivity("info", "boot", fullHost, fmt.Sprintf("Booting image %s", imageName))
-
-	log.Printf("iPXE boot: MAC=%s hostname=%s image=%s", mac, host.Hostname, imageName)
-
-	// Generate iPXE script
+	// Generate iPXE sanboot script
 	w.Header().Set("Content-Type", "text/plain")
-
-	if img.Type == "local" {
-		fmt.Fprintf(w, "#!ipxe\nexit\n")
-		return
-	}
-
-	httpBase := "http://pxe.g10.lo/files/"
-
 	script := "#!ipxe\n"
 	script += fmt.Sprintf("echo Booting %s for %s (%s)\n", imageName, host.Hostname, mac)
-
-	if img.Type == "iso" {
-		// For ISO, use sanboot to boot directly from HTTP.
-		// The HTTP block device layer uses a 1 MB read-ahead cache
-		// to minimize round-trips for sequential reads.
-		script += fmt.Sprintf("sanboot %s\n", img.Kernel)
-	} else if img.Type == "memdisk" {
-		// For memdisk, args go on kernel line
-		script += fmt.Sprintf("kernel %s%s", httpBase, img.Kernel)
-		if img.Append != "" {
-			script += " " + img.Append
-		}
-		script += "\n"
-		script += fmt.Sprintf("initrd %s%s\n", httpBase, img.Initrd)
-		script += "boot\n"
-	} else {
-		script += fmt.Sprintf("kernel %s%s", httpBase, img.Kernel)
-		if img.Append != "" {
-			script += " " + img.Append
-		}
-		script += "\n"
-		if img.Initrd != "" {
-			script += fmt.Sprintf("initrd %s%s\n", httpBase, img.Initrd)
-		}
-		script += "boot\n"
-	}
-
+	script += fmt.Sprintf("sanboot iscsi:%s::::%s\n", ISCSIPortalIP, cdrom.Status.TargetIQN)
 	fmt.Fprint(w, script)
 }
 
@@ -1770,6 +1736,9 @@ func handleAPIHostAction(w http.ResponseWriter, r *http.Request) {
 
 	action := r.URL.Query().Get("action")
 
+	// Look up host to get hostname for BMH operations
+	host, hostErr := getHostByMAC(mac)
+
 	switch action {
 	case "set_image":
 		image := r.FormValue("image")
@@ -1778,52 +1747,26 @@ func handleAPIHostAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Check if image has erase flags - if so, create a workflow
-		var eraseBootDrive, eraseAllDrives bool
-		db.QueryRow(`SELECT erase_boot_drive, erase_all_drives FROM images WHERE name = ?`, image).
-			Scan(&eraseBootDrive, &eraseAllDrives)
-
-		if eraseBootDrive || eraseAllDrives {
-			// Create erase workflow - this will boot to baremetalservices first, erase, then boot target
-			if err := createEraseWorkflow(mac, image, eraseBootDrive, eraseAllDrives); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+		// PATCH BMH in mkube (source of truth)
+		if hostErr == nil && host.Hostname != "" {
+			if err := updateBMHImage(host.Hostname, image); err != nil {
+				log.Printf("set_image: failed to PATCH BMH for %s: %v", host.Hostname, err)
+				logActivity("warn", "boot", host, fmt.Sprintf("Failed to update BMH image: %v", err))
 			}
-			// Set current image to the target (workflow will handle the erase step)
-			_, err := db.Exec(`UPDATE hosts SET current_image = ? WHERE mac = ?`, image, mac)
-			if err != nil {
+		}
+		// Also update SQLite for local state
+		db.Exec(`UPDATE hosts SET current_image = ? WHERE mac = ?`, image, mac)
+
+	case "set_config":
+		config := r.FormValue("config")
+		if hostErr == nil && host.Hostname != "" {
+			if err := updateBMHBootConfig(host.Hostname, config); err != nil {
+				log.Printf("set_config: failed to PATCH BMH for %s: %v", host.Hostname, err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		} else {
-			// No erase needed, just set the image directly
-			_, err := db.Exec(`UPDATE hosts SET current_image = ? WHERE mac = ?`, image, mac)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-
-	case "set_next":
-		image := r.FormValue("image")
-		_, err := db.Exec(`UPDATE hosts SET next_image = ? WHERE mac = ?`, image, mac)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-	case "set_cycle":
-		cycleJSON := r.FormValue("cycle")
-		_, err := db.Exec(`UPDATE hosts SET cycle_images = ?, cycle_index = 0 WHERE mac = ?`, cycleJSON, mac)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-	case "clear_cycle":
-		_, err := db.Exec(`UPDATE hosts SET cycle_images = NULL, cycle_index = 0, next_image = NULL WHERE mac = ?`, mac)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, "host not found", http.StatusNotFound)
 			return
 		}
 
@@ -2611,12 +2554,21 @@ func handleAPILogs(w http.ResponseWriter, r *http.Request) {
 // HTMX partial handlers
 func handleHostsTable(w http.ResponseWriter, r *http.Request) {
 	hosts, _ := getHosts()
-	images, _ := getImages()
+	cdroms := getISCSICdroms()
+
+	// Build a map of hostname → bootConfigRef from bmhMap
+	configRefs := make(map[string]string)
+	for _, h := range hosts {
+		if h.Hostname != "" {
+			configRefs[h.Hostname] = getHostBootConfigRef(h.Hostname)
+		}
+	}
 
 	data := struct {
-		Hosts  []Host
-		Images []Image
-	}{hosts, images}
+		Hosts      []Host
+		CDROMs     []ISCSICdromInfo
+		ConfigRefs map[string]string
+	}{hosts, cdroms, configRefs}
 
 	templates.ExecuteTemplate(w, "hosts_table.html", data)
 }
@@ -2674,14 +2626,25 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	hosts, _ := getHosts()
 	images, _ := getImages()
+	cdroms := getISCSICdroms()
 	logs, _ := getBootLogs(20)
 
+	// Build a map of hostname → bootConfigRef from bmhMap
+	configRefs := make(map[string]string)
+	for _, h := range hosts {
+		if h.Hostname != "" {
+			configRefs[h.Hostname] = getHostBootConfigRef(h.Hostname)
+		}
+	}
+
 	data := struct {
-		Hosts   []Host
-		Images  []Image
-		Logs    []BootLog
-		Version string
-	}{hosts, images, logs, Version}
+		Hosts      []Host
+		Images     []Image
+		CDROMs     []ISCSICdromInfo
+		ConfigRefs map[string]string
+		Logs       []BootLog
+		Version    string
+	}{hosts, images, cdroms, configRefs, logs, Version}
 
 	templates.ExecuteTemplate(w, "index.html", data)
 }
@@ -3459,6 +3422,10 @@ type bmhSpec struct {
 	BootMACAddress string `json:"bootMACAddress"`
 	Online         *bool  `json:"online,omitempty"`
 	Image          string `json:"image,omitempty"`
+	BootConfigRef  string `json:"bootConfigRef,omitempty"`
+	Network        string `json:"network,omitempty"`
+	IP             string `json:"ip,omitempty"`
+	Hostname       string `json:"hostname,omitempty"`
 }
 
 type bmhStatus struct {
@@ -3480,6 +3447,81 @@ type bmhList struct {
 type bmhWatchEvent struct {
 	Type   string    `json:"type"`
 	Object bmhObject `json:"object"`
+}
+
+// ─── iSCSI CDROM Types ──────────────────────────────────────────────────────
+
+type iscsiCdromSpec struct {
+	ISOFile     string   `json:"isoFile"`
+	Description string   `json:"description,omitempty"`
+	ReadOnly    bool     `json:"readOnly"`
+	BootConfigs []string `json:"bootConfigs,omitempty"`
+}
+
+type iscsiCdromStatus struct {
+	Phase      string `json:"phase"`
+	ISOPath    string `json:"isoPath"`
+	ISOSize    int64  `json:"isoSize,omitempty"`
+	TargetIQN  string `json:"targetIQN"`
+	PortalIP   string `json:"portalIP"`
+	PortalPort int    `json:"portalPort"`
+}
+
+type iscsiCdromObject struct {
+	Metadata bmhMetadata      `json:"metadata"`
+	Spec     iscsiCdromSpec   `json:"spec"`
+	Status   iscsiCdromStatus `json:"status,omitempty"`
+}
+
+type iscsiCdromList struct {
+	Items []iscsiCdromObject `json:"items"`
+}
+
+type iscsiCdromWatchEvent struct {
+	Type   string           `json:"type"`
+	Object iscsiCdromObject `json:"object"`
+}
+
+// iscsiCdromMap tracks iSCSI CDROMs: name → iscsiCdromObject
+var iscsiCdromMap sync.Map
+
+// ISCSICdromInfo is a simplified view of an iSCSI CDROM for templates
+type ISCSICdromInfo struct {
+	Name        string
+	Description string
+	TargetIQN   string
+	PortalIP    string
+	Phase       string
+	BootConfigs []string
+}
+
+// getISCSICdroms returns all cached iSCSI CDROMs as template-friendly structs
+func getISCSICdroms() []ISCSICdromInfo {
+	var cdroms []ISCSICdromInfo
+	iscsiCdromMap.Range(func(key, value interface{}) bool {
+		cdrom := value.(iscsiCdromObject)
+		cdroms = append(cdroms, ISCSICdromInfo{
+			Name:        cdrom.Metadata.Name,
+			Description: cdrom.Spec.Description,
+			TargetIQN:   cdrom.Status.TargetIQN,
+			PortalIP:    cdrom.Status.PortalIP,
+			Phase:       cdrom.Status.Phase,
+			BootConfigs: cdrom.Spec.BootConfigs,
+		})
+		return true
+	})
+	sort.Slice(cdroms, func(i, j int) bool { return cdroms[i].Name < cdroms[j].Name })
+	return cdroms
+}
+
+// getHostBootConfigRef returns the bootConfigRef for a host from bmhMap
+func getHostBootConfigRef(hostname string) string {
+	val, ok := bmhMap.Load(hostname)
+	if !ok {
+		return ""
+	}
+	bmh := val.(bmhObject)
+	return bmh.Spec.BootConfigRef
 }
 
 const bmhCachePath = "/var/lib/pxemanager/bmh-cache.json"
@@ -3562,10 +3604,7 @@ func syncBMHToHosts(bmhs []bmhObject) {
 			continue
 		}
 
-		// Host exists, check for changes
-		// NOTE: Do NOT update current_image here — that is a user-managed field.
-		// BMH sync only sets current_image on initial creation; after that the
-		// user controls it via the UI/API.
+		// Host exists, sync changes from BMH (source of truth)
 		changed := false
 		updates := []string{}
 		args := []interface{}{}
@@ -3573,6 +3612,12 @@ func syncBMHToHosts(bmhs []bmhObject) {
 		if existing.Hostname != hostname {
 			updates = append(updates, "hostname = ?")
 			args = append(args, hostname)
+			changed = true
+		}
+		// Sync current_image from BMH spec.image (CRD is source of truth)
+		if image != existing.CurrentImage {
+			updates = append(updates, "current_image = ?")
+			args = append(args, image)
 			changed = true
 		}
 		if ipmiIP != "" && (existing.IPMIIP == nil || *existing.IPMIIP != ipmiIP) {
@@ -3843,6 +3888,189 @@ func watchBMHStream(ctx context.Context, mkubeURL string) {
 	}
 }
 
+// ─── iSCSI CDROM Watcher ────────────────────────────────────────────────────
+
+func iscsiCdromWatcher(ctx context.Context, mkubeURL string) {
+	log.Printf("iSCSI CDROM watcher: starting (mkube=%s)", mkubeURL)
+
+	fetchAndSync := func() {
+		client := &http.Client{Timeout: 10 * time.Second}
+		resp, err := client.Get(mkubeURL + "/api/v1/iscsi-cdroms")
+		if err != nil {
+			log.Printf("iSCSI CDROM watcher: fetch failed: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		var list iscsiCdromList
+		if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+			log.Printf("iSCSI CDROM watcher: decode failed: %v", err)
+			return
+		}
+
+		for _, cdrom := range list.Items {
+			iscsiCdromMap.Store(cdrom.Metadata.Name, cdrom)
+		}
+		log.Printf("iSCSI CDROM watcher: synced %d CDROMs", len(list.Items))
+	}
+	fetchAndSync()
+
+	// Periodic refresh
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				fetchAndSync()
+			}
+		}
+	}()
+
+	// Watch with reconnect
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		watchISCSICdromStream(ctx, mkubeURL)
+
+		log.Printf("iSCSI CDROM watcher: watch disconnected, will reconnect in 5s")
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+			fetchAndSync()
+		}
+	}
+}
+
+func watchISCSICdromStream(ctx context.Context, mkubeURL string) {
+	req, err := http.NewRequestWithContext(ctx, "GET", mkubeURL+"/api/v1/iscsi-cdroms?watch=true", nil)
+	if err != nil {
+		log.Printf("iSCSI CDROM watcher: watch request failed: %v", err)
+		return
+	}
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Printf("iSCSI CDROM watcher: watch connect failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	log.Printf("iSCSI CDROM watcher: watch connected")
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var event iscsiCdromWatchEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			log.Printf("iSCSI CDROM watcher: decode event failed: %v", err)
+			continue
+		}
+
+		switch event.Type {
+		case "ADDED", "MODIFIED":
+			iscsiCdromMap.Store(event.Object.Metadata.Name, event.Object)
+			log.Printf("iSCSI CDROM watcher: %s %s (iqn=%s)", event.Type, event.Object.Metadata.Name, event.Object.Status.TargetIQN)
+		case "DELETED":
+			iscsiCdromMap.Delete(event.Object.Metadata.Name)
+			log.Printf("iSCSI CDROM watcher: DELETED %s", event.Object.Metadata.Name)
+		}
+	}
+}
+
+// updateBMHImage patches the BMH spec.image in mkube
+func updateBMHImage(hostname, image string) error {
+	if activeMkubeURL == "" {
+		return fmt.Errorf("mkube URL not configured")
+	}
+	val, ok := bmhMap.Load(hostname)
+	if !ok {
+		return fmt.Errorf("BMH not found for %s", hostname)
+	}
+	bmh := val.(bmhObject)
+	ns := bmh.Metadata.Namespace
+	if ns == "" {
+		return fmt.Errorf("BMH %s has no namespace", hostname)
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"image":%q}}`, image)
+	url := fmt.Sprintf("%s/api/v1/namespaces/%s/baremetalhosts/%s", activeMkubeURL, ns, hostname)
+	req, err := http.NewRequest("PATCH", url, strings.NewReader(patch))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PATCH failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	// Update local cache
+	bmh.Spec.Image = image
+	bmhMap.Store(hostname, bmh)
+	log.Printf("BMH image: updated %s/%s image=%s", ns, hostname, image)
+	return nil
+}
+
+// updateBMHBootConfig patches the BMH spec.bootConfigRef in mkube
+func updateBMHBootConfig(hostname, configRef string) error {
+	if activeMkubeURL == "" {
+		return fmt.Errorf("mkube URL not configured")
+	}
+	val, ok := bmhMap.Load(hostname)
+	if !ok {
+		return fmt.Errorf("BMH not found for %s", hostname)
+	}
+	bmh := val.(bmhObject)
+	ns := bmh.Metadata.Namespace
+	if ns == "" {
+		return fmt.Errorf("BMH %s has no namespace", hostname)
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"bootConfigRef":%q}}`, configRef)
+	url := fmt.Sprintf("%s/api/v1/namespaces/%s/baremetalhosts/%s", activeMkubeURL, ns, hostname)
+	req, err := http.NewRequest("PATCH", url, strings.NewReader(patch))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PATCH failed (%d): %s", resp.StatusCode, string(body))
+	}
+
+	// Update local cache
+	bmh.Spec.BootConfigRef = configRef
+	bmhMap.Store(hostname, bmh)
+	log.Printf("BMH bootConfig: updated %s/%s bootConfigRef=%s", ns, hostname, configRef)
+	return nil
+}
+
 func main() {
 	// Initialize database
 	if err := initDB(); err != nil {
@@ -3870,6 +4098,7 @@ func main() {
 	}
 	activeMkubeURL = mkubeURL
 	go bmhWatcher(context.Background(), mkubeURL)
+	go iscsiCdromWatcher(context.Background(), mkubeURL)
 
 	// Routes
 	http.HandleFunc("/", handleIndex)
