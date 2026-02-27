@@ -6,6 +6,9 @@
 - `stormbase` default image — boots stormbase ISO via memdisk
 - `stormbase.iso` added to data image manifest
 
+### Fixed
+- IPMI restart now checks power state first — powers on if off, power cycles if on (fixes IPMI 0xd5 error when restarting a powered-off server)
+
 ## [0.11.0] - 2026-02-26
 
 ### Added

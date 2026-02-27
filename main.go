@@ -732,20 +732,37 @@ func ipmiRestart(host *Host) error {
 		client.SetBootDevice(context.Background(), ipmi.BootDeviceSelectorForcePXE, ipmi.BIOSBootTypeLegacy, false)
 	}
 
-	_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerCycle)
-	if err == nil {
-		logActivity("info", "ipmi", host, fmt.Sprintf("Power cycle command sent (%s)", bootMsg))
-		// Reconnect SOL session after power cycle
-		if host.Hostname != "" {
-			go func() {
-				time.Sleep(15 * time.Second)
-				if err := reconnectConsole(host.Hostname); err != nil {
-					logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
-				}
-			}()
+	// Check power state — PowerCycle fails if server is off (IPMI 0xd5)
+	statusResp, err := client.GetChassisStatus(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get chassis status: %w", err)
+	}
+
+	if statusResp.PowerIsOn {
+		_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerCycle)
+		if err == nil {
+			logActivity("info", "ipmi", host, fmt.Sprintf("Power cycle command sent (%s)", bootMsg))
+		}
+	} else {
+		_, err = client.ChassisControl(context.Background(), ipmi.ChassisControlPowerUp)
+		if err == nil {
+			logActivity("info", "ipmi", host, fmt.Sprintf("Power on command sent (%s)", bootMsg))
 		}
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Reconnect SOL session after power change
+	if host.Hostname != "" {
+		go func() {
+			time.Sleep(15 * time.Second)
+			if err := reconnectConsole(host.Hostname); err != nil {
+				logActivity("warn", "console", host, fmt.Sprintf("Failed to reconnect console: %v", err))
+			}
+		}()
+	}
+	return nil
 }
 
 func ipmiSetBootPXE(host *Host) error {
