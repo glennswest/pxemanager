@@ -284,7 +284,7 @@
         <div class="toolbar">
             <button class="secondary" hx-get="/partials/hosts" hx-target="#hosts-table" hx-swap="innerHTML">Refresh</button>
         </div>
-        <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body, every 5s" hx-swap="morph:innerHTML">
+        <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body, every 3s" hx-swap="innerHTML">
             {{template "hosts_table.html" .}}
         </div>
 
