@@ -1537,7 +1537,7 @@ func handleBootIPXE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprint(w, `#!ipxe
 dhcp
-chain http://pxe.g10.lo/ipxe?mac=${net0/mac} || shell
+chain http://192.168.10.200/ipxe?mac=${net0/mac} || shell
 `)
 }
 
