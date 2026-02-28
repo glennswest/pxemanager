@@ -965,14 +965,20 @@ func startPowerTransition(host *Host, action string) error {
 	powerTransitions.Delete(host.Hostname)
 
 	// Rotate console logs before IPMI command so ipmiserial starts a new log
-	imageName := getHostBMHImage(host.Hostname)
-	if imageName == "" {
-		imageName = host.CurrentImage
+	// Power off → "idle", power on/restart → image name
+	var labelName string
+	if action == "power_off" {
+		labelName = "idle"
+	} else {
+		labelName = getHostBMHImage(host.Hostname)
+		if labelName == "" {
+			labelName = host.CurrentImage
+		}
+		if labelName == "" || labelName == "localboot" {
+			labelName = "idle"
+		}
 	}
-	if imageName == "" || imageName == "localboot" {
-		imageName = "idle"
-	}
-	label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
+	label := fmt.Sprintf("%s-%s", labelName, time.Now().Format("20060102-150405"))
 	if err := rotateConsoleLogs(host.Hostname, label); err != nil {
 		log.Printf("Failed to rotate console logs for %s before %s: %v", host.Hostname, action, err)
 	}
