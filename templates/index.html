@@ -284,7 +284,7 @@
         <div class="toolbar">
             <button class="secondary" hx-get="/partials/hosts" hx-target="#hosts-table" hx-swap="innerHTML">Refresh</button>
         </div>
-        <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body">
+        <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body, every 5s" hx-swap="morph:innerHTML">
             {{template "hosts_table.html" .}}
         </div>
 
@@ -309,7 +309,7 @@
         <div class="toolbar">
             <button class="secondary" hx-get="/partials/images" hx-target="#images-table" hx-swap="innerHTML">Refresh</button>
         </div>
-        <div id="images-table" hx-get="/partials/images" hx-trigger="load, imagesUpdated from:body">
+        <div id="images-table" hx-get="/partials/images" hx-trigger="load, imagesUpdated from:body, every 10s" hx-swap="morph:innerHTML">
             {{template "images_table.html" .Images}}
         </div>
     </div>
