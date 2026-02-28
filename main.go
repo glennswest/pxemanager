@@ -57,6 +57,73 @@ type PowerTransition struct {
 // powerTransitions tracks active power transitions: hostname → *PowerTransition
 var powerTransitions sync.Map
 
+// ─── SSE Event Bus ──────────────────────────────────────────────────────────
+
+// sseClients holds all connected SSE clients. Each client is a channel that
+// receives event names (e.g. "hostsUpdated", "activityUpdated", "imagesUpdated").
+var sseClients struct {
+	mu      sync.Mutex
+	clients map[chan string]bool
+}
+
+func init() {
+	sseClients.clients = make(map[chan string]bool)
+}
+
+// sseBroadcast sends an event to all connected SSE clients.
+func sseBroadcast(event string) {
+	sseClients.mu.Lock()
+	defer sseClients.mu.Unlock()
+	for ch := range sseClients.clients {
+		select {
+		case ch <- event:
+		default:
+			// Client too slow, skip
+		}
+	}
+}
+
+// handleSSE serves a Server-Sent Events stream. Connected browsers receive
+// instant notifications when hosts, images, or activity state changes.
+func handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch := make(chan string, 16)
+	sseClients.mu.Lock()
+	sseClients.clients[ch] = true
+	sseClients.mu.Unlock()
+
+	defer func() {
+		sseClients.mu.Lock()
+		delete(sseClients.clients, ch)
+		sseClients.mu.Unlock()
+	}()
+
+	// Send initial heartbeat so client knows connection is live
+	fmt.Fprintf(w, "event: connected\ndata: {}\n\n")
+	flusher.Flush()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-ch:
+			fmt.Fprintf(w, "event: %s\ndata: {}\n\n", event)
+			flusher.Flush()
+		}
+	}
+}
+
 //go:embed templates/*
 var templatesFS embed.FS
 
@@ -558,6 +625,15 @@ func logActivity(level, category string, host *Host, message string) {
 		log.Printf("Failed to log activity: %v", err)
 	}
 	log.Printf("[%s] %s: %s (host=%s mac=%s)", level, category, message, hostname, mac)
+
+	// Push SSE events based on category
+	sseBroadcast("activityUpdated")
+	switch category {
+	case "bmh-sync", "boot", "workflow", "image", "config":
+		sseBroadcast("hostsUpdated")
+	case "ipmi":
+		sseBroadcast("hostsUpdated")
+	}
 }
 
 func getActivityLogs(limit int) ([]ActivityLog, error) {
@@ -3911,6 +3987,7 @@ func iscsiCdromWatcher(ctx context.Context, mkubeURL string) {
 			iscsiCdromMap.Store(cdrom.Metadata.Name, cdrom)
 		}
 		log.Printf("iSCSI CDROM watcher: synced %d CDROMs", len(list.Items))
+		sseBroadcast("imagesUpdated")
 	}
 	fetchAndSync()
 
@@ -3981,9 +4058,11 @@ func watchISCSICdromStream(ctx context.Context, mkubeURL string) {
 		case "ADDED", "MODIFIED":
 			iscsiCdromMap.Store(event.Object.Metadata.Name, event.Object)
 			log.Printf("iSCSI CDROM watcher: %s %s (iqn=%s)", event.Type, event.Object.Metadata.Name, event.Object.Status.TargetIQN)
+			sseBroadcast("imagesUpdated")
 		case "DELETED":
 			iscsiCdromMap.Delete(event.Object.Metadata.Name)
 			log.Printf("iSCSI CDROM watcher: DELETED %s", event.Object.Metadata.Name)
+			sseBroadcast("imagesUpdated")
 		}
 	}
 }
@@ -4150,6 +4229,9 @@ func main() {
 
 	// Activity log routes
 	http.HandleFunc("/api/activity", handleAPIActivity)
+
+	// SSE event stream
+	http.HandleFunc("/events", handleSSE)
 
 	// Redfish API routes (for OpenShift Bare Metal Operator)
 	http.HandleFunc("/redfish/v1", handleRedfishRoot)

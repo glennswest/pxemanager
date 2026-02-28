@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PXE Manager</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://unpkg.com/idiomorph@0.3.0/dist/idiomorph-ext.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -269,7 +268,7 @@
         .detail-value { color: #eee; font-family: monospace; }
     </style>
 </head>
-<body hx-headers='{"Content-Type": "application/x-www-form-urlencoded"}' hx-ext="morph">
+<body hx-headers='{"Content-Type": "application/x-www-form-urlencoded"}'>
     <header>
         <h1>PXE Manager <span class="version">v{{.Version}}</span></h1>
     </header>
@@ -284,13 +283,13 @@
         <div class="toolbar">
             <button class="secondary" hx-get="/partials/hosts" hx-target="#hosts-table" hx-swap="innerHTML">Refresh</button>
         </div>
-        <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body, every 3s" hx-swap="innerHTML">
+        <div id="hosts-table" hx-get="/partials/hosts" hx-trigger="load, hostsUpdated from:body" hx-swap="innerHTML">
             {{template "hosts_table.html" .}}
         </div>
 
         <div class="activity-section">
             <h2>Activity Log</h2>
-            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, every 10s" hx-swap="morph:innerHTML">
+            <div id="activity-table" class="scroll-container" hx-get="/partials/activity" hx-trigger="load, activityUpdated from:body" hx-swap="innerHTML">
             </div>
         </div>
     </div>
@@ -309,7 +308,7 @@
         <div class="toolbar">
             <button class="secondary" hx-get="/partials/images" hx-target="#images-table" hx-swap="innerHTML">Refresh</button>
         </div>
-        <div id="images-table" hx-get="/partials/images" hx-trigger="load, imagesUpdated from:body, every 10s" hx-swap="morph:innerHTML">
+        <div id="images-table" hx-get="/partials/images" hx-trigger="load, imagesUpdated from:body" hx-swap="innerHTML">
             {{template "images_table.html" .Images}}
         </div>
     </div>
@@ -385,6 +384,28 @@
             }
             configSelect.innerHTML = html;
         }
+
+        // SSE — event-driven UI updates (no polling)
+        (function() {
+            var evtSource;
+            function connect() {
+                evtSource = new EventSource('/events');
+                evtSource.addEventListener('hostsUpdated', function() {
+                    htmx.trigger(document.body, 'hostsUpdated');
+                });
+                evtSource.addEventListener('activityUpdated', function() {
+                    htmx.trigger(document.body, 'activityUpdated');
+                });
+                evtSource.addEventListener('imagesUpdated', function() {
+                    htmx.trigger(document.body, 'imagesUpdated');
+                });
+                evtSource.onerror = function() {
+                    evtSource.close();
+                    setTimeout(connect, 3000);
+                };
+            }
+            connect();
+        })();
     </script>
 </body>
 </html>
