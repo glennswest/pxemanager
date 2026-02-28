@@ -57,6 +57,62 @@ type PowerTransition struct {
 // powerTransitions tracks active power transitions: hostname → *PowerTransition
 var powerTransitions sync.Map
 
+// powerStateCache caches IPMI power status per host: hostname → "on"/"off"/"unknown"
+var powerStateCache sync.Map
+
+// ipmiPowerPoller runs a background loop that polls IPMI power status for all
+// hosts with IPMI configured. Updates powerStateCache and broadcasts SSE events
+// when state changes. Polls every 30s normally, every 2s during transitions.
+func ipmiPowerPoller() {
+	for {
+		// Collect hosts with IPMI
+		rows, err := db.Query(`SELECT hostname, ipmi_ip, ipmi_username, ipmi_password FROM hosts WHERE ipmi_ip IS NOT NULL AND ipmi_ip != ''`)
+		if err != nil {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		type ipmiHost struct {
+			hostname, ip, user, pass string
+		}
+		var hosts []ipmiHost
+		for rows.Next() {
+			var h ipmiHost
+			if err := rows.Scan(&h.hostname, &h.ip, &h.user, &h.pass); err == nil {
+				hosts = append(hosts, h)
+			}
+		}
+		rows.Close()
+
+		changed := false
+		for _, h := range hosts {
+			// Skip hosts with active transitions — those poll faster internally
+			if _, transitioning := powerTransitions.Load(h.hostname); transitioning {
+				continue
+			}
+
+			host := &Host{
+				Hostname:     h.hostname,
+				IPMIIP:       &h.ip,
+				IPMIUsername:  h.user,
+				IPMIPassword: h.pass,
+			}
+			status, _ := ipmiPowerStatus(host)
+			old, _ := powerStateCache.Load(h.hostname)
+			powerStateCache.Store(h.hostname, status)
+			if old != status {
+				changed = true
+			}
+		}
+
+		if changed {
+			sseBroadcast("hostsUpdated")
+		}
+
+		time.Sleep(30 * time.Second)
+	}
+}
+
 // ─── SSE Event Bus ──────────────────────────────────────────────────────────
 
 // sseClients holds all connected SSE clients. Each client is a channel that
@@ -908,6 +964,19 @@ func startPowerTransition(host *Host, action string) error {
 	// Cancel any existing transition for this host
 	powerTransitions.Delete(host.Hostname)
 
+	// Rotate console logs before IPMI command so ipmiserial starts a new log
+	imageName := getHostBMHImage(host.Hostname)
+	if imageName == "" {
+		imageName = host.CurrentImage
+	}
+	if imageName == "" || imageName == "localboot" {
+		imageName = "idle"
+	}
+	label := fmt.Sprintf("%s-%s", imageName, time.Now().Format("20060102-150405"))
+	if err := rotateConsoleLogs(host.Hostname, label); err != nil {
+		log.Printf("Failed to rotate console logs for %s before %s: %v", host.Hostname, action, err)
+	}
+
 	// Send the initial IPMI command synchronously (catches auth/network errors)
 	var sendErr error
 	switch action {
@@ -980,6 +1049,10 @@ func verifyPowerTransition(hostname string, t *PowerTransition) {
 			time.Sleep(pollInterval)
 			continue
 		}
+
+		// Update cache on every poll so UI reflects real-time state
+		powerStateCache.Store(hostname, status)
+		sseBroadcast("hostsUpdated")
 
 		isDesired := (t.DesiredOn && status == "on") || (!t.DesiredOn && status == "off")
 		// For restart, don't count "on" as success too early (might not have cycled yet)
@@ -2049,17 +2122,19 @@ func handleAPIHostIPMIStatus(w http.ResponseWriter, r *http.Request) {
 	transState := getTransitionState(hostname)
 
 	if transState != "" {
-		// Transition active — fast poll (every 2s)
 		label := transitionLabel(transState)
 		cssClass := transitionCSSClass(transState)
 		fmt.Fprintf(w,
-			`<span class="power-badge %s" hx-get="/api/host/ipmi/status?host=%s" hx-trigger="every 2s" hx-swap="outerHTML">%s</span>`,
-			cssClass, hostname, label)
+			`<span class="power-badge %s"><span class="spinner"></span> %s</span>`,
+			cssClass, label)
 		return
 	}
 
-	// No transition — normal poll (every 30s)
-	status, _ := ipmiPowerStatus(host)
+	// Read from cache (populated by ipmiPowerPoller)
+	status := "unknown"
+	if cached, ok := powerStateCache.Load(hostname); ok {
+		status = cached.(string)
+	}
 	cssClass := "power-unknown"
 	label := "-"
 	switch status {
@@ -2071,8 +2146,8 @@ func handleAPIHostIPMIStatus(w http.ResponseWriter, r *http.Request) {
 		label = "OFF"
 	}
 	fmt.Fprintf(w,
-		`<span class="power-badge %s" hx-get="/api/host/ipmi/status?host=%s" hx-trigger="every 30s" hx-swap="outerHTML">%s</span>`,
-		cssClass, hostname, label)
+		`<span class="power-badge %s">%s</span>`,
+		cssClass, label)
 }
 
 func handleAPIHostIPMITest(w http.ResponseWriter, r *http.Request) {
@@ -4177,6 +4252,7 @@ func main() {
 	activeMkubeURL = mkubeURL
 	go bmhWatcher(context.Background(), mkubeURL)
 	go iscsiCdromWatcher(context.Background(), mkubeURL)
+	go ipmiPowerPoller()
 
 	// Routes
 	http.HandleFunc("/", handleIndex)

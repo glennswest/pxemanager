@@ -26,7 +26,7 @@
             </td>
             <td class="power-status">
                 {{if and .IPMIIP .Hostname}}
-                <span class="power-badge power-unknown" hx-get="/api/host/ipmi/status?host={{.Hostname}}" hx-trigger="load, every 30s" hx-swap="outerHTML">...</span>
+                <span class="power-badge power-unknown" hx-get="/api/host/ipmi/status?host={{.Hostname}}" hx-trigger="load" hx-swap="outerHTML">...</span>
                 {{else}}-{{end}}
             </td>
             <td>
