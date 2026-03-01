@@ -3764,31 +3764,37 @@ func syncBMHToHosts(bmhs []bmhObject) {
 		changed := false
 		updates := []string{}
 		args := []interface{}{}
+		changes := []string{} // human-readable change descriptions
 
 		if existing.Hostname != hostname {
 			updates = append(updates, "hostname = ?")
 			args = append(args, hostname)
+			changes = append(changes, fmt.Sprintf("hostname=%s", hostname))
 			changed = true
 		}
 		// Sync current_image from BMH spec.image (CRD is source of truth)
 		if image != existing.CurrentImage {
 			updates = append(updates, "current_image = ?")
 			args = append(args, image)
+			changes = append(changes, fmt.Sprintf("image=%s", image))
 			changed = true
 		}
 		if ipmiIP != "" && (existing.IPMIIP == nil || *existing.IPMIIP != ipmiIP) {
 			updates = append(updates, "ipmi_ip = ?")
 			args = append(args, ipmiIP)
+			changes = append(changes, fmt.Sprintf("ipmi_ip=%s", ipmiIP))
 			changed = true
 		}
 		if bmcUser != existing.IPMIUsername {
 			updates = append(updates, "ipmi_username = ?")
 			args = append(args, bmcUser)
+			changes = append(changes, "ipmi_username=***")
 			changed = true
 		}
 		if bmcPass != existing.IPMIPassword {
 			updates = append(updates, "ipmi_password = ?")
 			args = append(args, bmcPass)
+			changes = append(changes, "ipmi_password=***")
 			changed = true
 		}
 
@@ -3800,7 +3806,7 @@ func syncBMHToHosts(bmhs []bmhObject) {
 				continue
 			}
 			log.Printf("BMH sync: updated host %s (mac=%s)", hostname, mac)
-			logActivity("info", "bmh-sync", existing, fmt.Sprintf("Host updated from BMH: %s", strings.Join(updates, ", ")))
+			logActivity("info", "bmh-sync", existing, fmt.Sprintf("Host updated from BMH: %s", strings.Join(changes, ", ")))
 		}
 	}
 
