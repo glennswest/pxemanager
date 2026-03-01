@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- BMH sync activity log now shows actual values (e.g. `image=stormbase-live`) instead of SQL placeholders (`current_image = ?`)
+
 ## [0.11.2] - 2026-02-27
 
 ### Added
